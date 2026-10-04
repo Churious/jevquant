@@ -7,7 +7,7 @@ import sys
 import tempfile
 
 
-def main():
+def main(provider="kiwoom"):
     if not sys.stdin.isatty():
         raise SystemExit(
             "SSH 터미널에서 직접 실행하세요. 비대화형 키 입력은 지원하지 않습니다."
@@ -15,10 +15,15 @@ def main():
     target = Path(__file__).resolve().parents[2] / ".env"
     if not target.is_file() or target.is_symlink():
         raise SystemExit("저장소의 일반 .env 파일이 필요합니다.")
-    print("키움 REST 키를 서버 .env에 저장합니다. 입력 값은 화면에 표시되지 않습니다.")
+    label, names = (
+        ("키움 REST", ("KIWOOM_APP_KEY", "KIWOOM_SECRET_KEY"))
+        if provider == "kiwoom"
+        else ("Alpaca 시세", ("ALPACA_API_KEY", "ALPACA_API_SECRET"))
+    )
+    print(f"{label} 키를 서버 .env에 저장합니다. 입력 값은 화면에 표시되지 않습니다.")
     values = {
-        "KIWOOM_APP_KEY": getpass.getpass("App Key: ").strip(),
-        "KIWOOM_SECRET_KEY": getpass.getpass("Secret Key: ").strip(),
+        names[0]: getpass.getpass("App Key: ").strip(),
+        names[1]: getpass.getpass("Secret Key: ").strip(),
     }
     if any(
         not value or "\\" in value or any(ord(c) < 32 for c in value)
@@ -54,4 +59,10 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        description="서버에서 시세 API 키를 화면 표시 없이 입력"
+    )
+    parser.add_argument("--provider", choices=["kiwoom", "alpaca"], default="kiwoom")
+    main(parser.parse_args().provider)

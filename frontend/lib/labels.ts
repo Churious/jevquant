@@ -30,6 +30,9 @@ const labels: Record<string, string> = {
   REST_FALLBACK: "REST 대체 수집",
   CREDENTIALS_MISSING: "시세 API 키 필요",
   KIWOOM_CREDENTIALS_MISSING: "키움 REST 앱키·시크릿키 필요",
+  ALPACA_CREDENTIALS_MISSING: "미국 시세용 Alpaca 키 필요",
+  SCHEDULED_WAIT: "예정 시작 시각 대기",
+  WAITING_START_MARKET: "미국 시장 시작·시세 준비 대기",
   WARMING_UP: "과거 데이터 준비 중",
   MARKET_CLOSED: "장 마감·휴장",
   REPLAY_IDLE: "리플레이 대기",
@@ -95,6 +98,10 @@ const names: Record<string, string> = {
   "229200": "KODEX 코스닥150",
   "BTC/KRW": "비트코인",
   "ETH/KRW": "이더리움",
+  AAPL: "애플",
+  MSFT: "마이크로소프트",
+  SPY: "SPDR S&P 500 ETF",
+  QQQ: "Invesco QQQ ETF",
 };
 export const assetName = (symbol: string) => names[symbol] ?? symbol;
 export const strategies: [string, string][] = [

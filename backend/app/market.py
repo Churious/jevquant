@@ -198,10 +198,14 @@ class StockProvider(MarketDataProvider):
 
     name = "alpaca"
 
-    def __init__(self, client: httpx.AsyncClient):
+    def __init__(self, client: httpx.AsyncClient, key=None, secret=None):
         self.client = client
-        self.key = os.getenv("STOCK_API_KEY", "")
-        self.secret = os.getenv("STOCK_API_SECRET", "")
+        self.key = os.getenv("STOCK_API_KEY", "") if key is None else key
+        self.secret = os.getenv("STOCK_API_SECRET", "") if secret is None else secret
+        self.feed = os.getenv("STOCK_FEED", "iex")
+
+    async def before_request(self):
+        pass
 
     async def history(self, symbol, timeframe, limit):
         if not self.key or not self.secret:
@@ -212,15 +216,17 @@ class StockProvider(MarketDataProvider):
             "timeframe": {"1m": "1Min", "5m": "5Min", "15m": "15Min", "1h": "1Hour"}[
                 timeframe
             ],
-            "start": (now - timedelta(days=45)).isoformat(),
+            "start": (now - timedelta(days=75)).isoformat(),
             "end": now.isoformat(),
-            "feed": os.getenv("STOCK_FEED", "iex"),
+            "feed": self.feed,
             "adjustment": "raw",
             "sort": "desc",
-            "limit": limit,
+            "limit": min(limit, 10000),
         }
         bars = []
+        seen = set()
         while len(bars) < limit:
+            await self.before_request()
             r = await self.client.get(
                 "https://data.alpaca.markets/v2/stocks/bars",
                 params=params,
@@ -247,6 +253,9 @@ class StockProvider(MarketDataProvider):
             token = body.get("next_page_token")
             if not token:
                 break
+            if token in seen:
+                raise ValueError("ALPACA_REPEATED_CONTINUATION")
+            seen.add(token)
             params["page_token"] = token
         return sorted(bars[:limit], key=lambda b: b.timestamp)
 

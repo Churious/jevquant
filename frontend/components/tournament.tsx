@@ -39,14 +39,16 @@ export function Countdown({ tournament: d }: { tournament: Tournament }) {
       <strong>
         {d.status === "COMPLETED"
           ? `${d.duration_days}일 평가 완료`
-          : seconds == null
-            ? "시장 데이터 준비 중"
+          : d.status === "EXPIRED"
+            ? "예정 기간 종료 · 거래 미시작"
+            : seconds == null
+            ? d.scheduled_start_at ? "예정 시작·시세 연결 대기" : "시장 데이터 준비 중"
             : `${Math.floor(seconds / 86400)}일 ${String(Math.floor((seconds % 86400) / 3600)).padStart(2, "0")}:${String(Math.floor((seconds % 3600) / 60)).padStart(2, "0")}:${String(seconds % 60).padStart(2, "0")}`}
       </strong>
       <span className="muted">
         {d.day
           ? `${d.day}일차 / ${d.duration_days}일`
-          : "첫 유효 시장 상태에서 시작"}
+          : d.scheduled_start_at ? `예정 ${time(d.scheduled_start_at)}` : "첫 유효 시장 상태에서 시작"}
       </span>
     </div>
   );

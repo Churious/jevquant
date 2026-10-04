@@ -51,6 +51,12 @@ export type Tournament = {
   status: string;
   started_at: string | null;
   ends_at: string | null;
+  scheduled_start_at: string | null;
+  scheduled_end_at: string | null;
+  usd_krw: number | null;
+  fx_reference: string | null;
+  us_fractional: boolean;
+  kr_holidays: string[];
   duration_days: number;
   day: number;
   remaining_seconds: number | null;
@@ -131,6 +137,7 @@ export const statusName = (s: string) =>
       RUNNING: "진행 중",
       PAUSED: "일시정지",
       COMPLETED: "종료",
+      EXPIRED: "시세 미준비로 미개최",
     }) as Record<string, string>
   )[s] ?? s;
 export const signed = (n: number | null | undefined, suffix = "") =>

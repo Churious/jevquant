@@ -353,6 +353,10 @@ class PaperBroker(Broker):
         return order
 
     def open(self, db, account, positions, decision, bar, state):
+        from .equity_sessions import account_bar, price_factor
+
+        factor = price_factor(bar.symbol, self.cfg)
+        bar = account_bar(bar, self.cfg)
         if account.tournament_id:
             tournament = db.get(Tournament, account.tournament_id)
             if tournament.status != "RUNNING" or bar.timestamp >= aware(
@@ -373,7 +377,7 @@ class PaperBroker(Broker):
             equity(account, positions),
             account.cash,
             fill,
-            state["volatility"]["atr14"],
+            state["volatility"]["atr14"] * factor,
             self.cfg,
         )
         if not passive_account(account):
@@ -391,7 +395,12 @@ class PaperBroker(Broker):
 
             if decision.action == "SHORT" and not self.cfg.trading.allow_stock_shorts:
                 return "STOCK_SHORT_DISABLED"
-            qty = math.floor(qty)  # Korean equities and ETFs trade in whole shares.
+            qty = (
+                math.floor(qty * 1000000) / 1000000
+                if bar.symbol in self.cfg.market.us_stock_symbols
+                and self.cfg.trading.allow_us_fractional
+                else math.floor(qty)
+            )
         if qty <= 0:
             return "INVALID_SIZE"
         order = self.order(
@@ -489,10 +498,16 @@ class PaperBroker(Broker):
 
 
 def process_execution_bar(db, run_id, bar, cfg, phase="all", allow_entries=True):
+    from .equity_sessions import account_bar, session_open, session_exit_due
+
+    if "/" not in bar.symbol and not session_open(bar.symbol, bar.timestamp, cfg):
+        return
+    quote_bar = bar
+    bar = account_bar(bar, cfg)
     run = db.get(ResearchRun, run_id)
     tournament = db.get(Tournament, run_id)
     if tournament and (
-        tournament.status in {"PENDING", "COMPLETED"}
+        tournament.status in {"PENDING", "COMPLETED", "EXPIRED"}
         or bar.timestamp < aware(tournament.started_at)
         or bar.end > aware(tournament.ends_at)
     ):
@@ -509,13 +524,10 @@ def process_execution_bar(db, run_id, bar, cfg, phase="all", allow_entries=True)
         timed_exit = False
         session_exit = False
         if phase != "close" and not passive_account(account):
-            from zoneinfo import ZoneInfo
-
-            local = aware(bar.timestamp).astimezone(ZoneInfo(cfg.trading.timezone))
             session_exit = (
                 cfg_for_account.strategy.max_holding_minutes > 0
                 and "/" not in bar.symbol
-                and local.hour * 60 + local.minute >= 920
+                and session_exit_due(bar.symbol, bar.timestamp, cfg_for_account)
             )
             for p in list(positions):
                 if p.symbol != bar.symbol:
@@ -601,7 +613,7 @@ def process_execution_bar(db, run_id, bar, cfg, phase="all", allow_entries=True)
                 decision.status = "PAUSED"
             else:
                 decision.status = broker.open(
-                    db, account, positions, decision, bar, feature.state
+                    db, account, positions, decision, quote_bar, feature.state
                 )
         for p in list(positions) if phase != "open" else []:
             if p.symbol != bar.symbol:
@@ -625,9 +637,14 @@ def process_execution_bar(db, run_id, bar, cfg, phase="all", allow_entries=True)
 
 
 def process_execution_batch(db, run_id, bars, cfg, allow_entries=True):
+    from .equity_sessions import session_open
+
+    bars = [
+        b for b in bars if "/" in b.symbol or session_open(b.symbol, b.timestamp, cfg)
+    ]
     tournament = db.get(Tournament, run_id)
     if tournament:
-        if tournament.status in {"PENDING", "COMPLETED"}:
+        if tournament.status in {"PENDING", "COMPLETED", "EXPIRED"}:
             return
         bars = [
             b
@@ -642,7 +659,9 @@ def process_execution_batch(db, run_id, bars, cfg, allow_entries=True):
     for a in accounts:
         ps = list(db.scalars(select(Position).where(Position.account_id == a.id)))
         update_daily(a, ps, bars[0].timestamp, account_config(db, a, cfg))
-        opens = {b.symbol: b.open for b in bars}
+        from .equity_sessions import price_factor
+
+        opens = {b.symbol: b.open * price_factor(b.symbol, cfg) for b in bars}
         for p in ps:
             if p.symbol in opens:
                 p.current_price = opens[p.symbol]

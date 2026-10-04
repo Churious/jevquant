@@ -60,7 +60,7 @@ function Competition({ d }: { d: Tournament }) {
       <div className="topline">
         <div>
           <div className="eyebrow">동일 시장 · 독립 자금 · 실제 주문 없음</div>
-          <h1>Jev Trading Tournament</h1>
+          <h1>{d.name}</h1>
           <p>
             어떤 Jev 투자 방식이 가장 많은 돈을 벌까?{" "}
             {d.participants.filter((p) => p.kind === "jev").length}개 Jev와{" "}
@@ -76,7 +76,7 @@ function Competition({ d }: { d: Tournament }) {
           참가자별 시작금 <b>{money(d.starting_capital)}</b>
         </span>
         <span>
-          시장 <b>{d.market_universe.join(" · ")}</b>
+          시장 <b>{d.market_universe.map(assetName).join(" · ")}</b>
         </span>
         <span>
           현재 1위{" "}
@@ -92,6 +92,15 @@ function Competition({ d }: { d: Tournament }) {
           </span>
         )}
       </div>
+      {d.scheduled_start_at && d.scheduled_end_at && (
+        <section className="panel">
+          <h2>이번 대회 일정</h2>
+          <p>예정 시작 {time(d.scheduled_start_at)} · 고정 종료 {time(d.scheduled_end_at)} (한국시간)</p>
+          <p>각 시장의 정규장에서만 가상거래합니다. 한국 휴장일: {d.kr_holidays.join(" · ") || "지정된 휴장일 없음"}. 미국 정규장은 뉴욕시간 09:30~16:00입니다.</p>
+          <p>시세 키와 과거 데이터가 준비돼야 시작합니다. 늦게 시작해도 종료 시각은 연장하지 않습니다.</p>
+          {d.usd_krw && <p>미국 시세는 달러 기준이며, 가상 장부는 고정 환율 1 USD = {d.usd_krw.toLocaleString("ko-KR")}원으로 계산합니다. {d.us_fractional ? "미국 종목은 소수점 수량을 가상 체결합니다." : "미국 종목은 정수 주로 가상 체결합니다."}</p>}
+        </section>
+      )}
       <section className="panel">
         <div className="market-status">
           {d.market_universe.map((symbol) => (

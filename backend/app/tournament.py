@@ -1,6 +1,6 @@
 """Seven-day tournaments over the existing isolated paper account ledger."""
 
-from datetime import timedelta
+from datetime import datetime, timedelta
 from statistics import mean, median
 
 from sqlalchemy import select
@@ -33,14 +33,34 @@ from .trading import (
 def market_universe(cfg):
     mode = cfg.tournament.market_mode
     return (cfg.market.crypto_symbols if mode in {"crypto", "mixed"} else []) + (
-        cfg.market.stock_symbols if mode in {"stock", "mixed"} else []
+        cfg.market.stock_symbols + cfg.market.us_stock_symbols
+        if mode in {"stock", "mixed"}
+        else []
     )
 
 
 def tournament_fingerprint(cfg, inherited):
+    configuration = cfg.model_dump()
+    # Preserve the fingerprints of existing experiments when new optional features are unused.
+    for section, defaults in {
+        "market": {"us_stock_symbols": [], "kr_holidays": [], "us_holidays": []},
+        "trading": {
+            "usd_krw": None,
+            "fx_reference": None,
+            "allow_us_fractional": False,
+        },
+        "tournament": {
+            "scheduled_start_at": None,
+            "scheduled_end_at": None,
+            "start_market": "any",
+        },
+    }.items():
+        for key, value in defaults.items():
+            if configuration.get(section) and configuration[section].get(key) == value:
+                configuration[section].pop(key, None)
     return state_hash(
         {
-            "configuration": cfg.model_dump(),
+            "configuration": configuration,
             "runtime": inherited.identity(),
             "concurrency": inherited.concurrency,
             "timeout": inherited.timeout_seconds,
@@ -129,8 +149,16 @@ def ensure_tournament(db, tournament_id, cfg, inherited, mode="LIVE_PAPER"):
 def start_tournament(db, tournament, timestamp, cfg):
     if tournament.status != "PENDING":
         return
+    from .equity_sessions import window_status
+
+    if window_status(cfg, timestamp):
+        return
     tournament.started_at = aware(timestamp)
-    tournament.ends_at = aware(timestamp) + timedelta(days=tournament.duration_days)
+    tournament.ends_at = (
+        datetime.fromisoformat(cfg.tournament.scheduled_end_at)
+        if cfg.tournament.scheduled_end_at
+        else aware(timestamp) + timedelta(days=tournament.duration_days)
+    )
     tournament.status = "RUNNING"
     snapshot_accounts(db, tournament.run_id, timestamp, cfg)
     db.flush()
@@ -270,6 +298,14 @@ def comparison(ranking):
 
 def finish_if_due(db, tournament, now, cfg):
     if (
+        tournament.status == "PENDING"
+        and cfg.tournament.scheduled_end_at
+        and aware(now) >= datetime.fromisoformat(cfg.tournament.scheduled_end_at)
+    ):
+        tournament.status = "EXPIRED"
+        db.get(ResearchRun, tournament.run_id).paused = True
+        return True
+    if (
         tournament.status == "COMPLETED"
         or not tournament.ends_at
         or aware(now) < aware(tournament.ends_at)
@@ -290,8 +326,12 @@ def finish_if_due(db, tournament, now, cfg):
             .limit(1)
         )
         if candle:
+            from .equity_sessions import price_factor
+
             prices[symbol] = {
-                "price": candle.close,
+                "price": candle.close * price_factor(symbol, cfg),
+                "quote_price": candle.close,
+                "account_currency": cfg.trading.base_currency,
                 "observed_at": candle.bar().end.isoformat(),
                 "stale": (end - candle.bar().end).total_seconds() > 120,
             }

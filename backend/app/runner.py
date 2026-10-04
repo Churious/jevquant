@@ -72,6 +72,9 @@ class Runner:
     async def start(self):
         self.client = httpx.AsyncClient(timeout=20)
         self.crypto, self.stock = providers(self.client)
+        from .us_market import USStockProvider
+
+        self.us_stock = USStockProvider(self.client)
         self.jev = JevClient(self.client, self.cfg, self.decision_runtime)
         with Session.begin() as db:
             if self.tournament_mode:
@@ -116,6 +119,7 @@ class Runner:
         if self.client:
             if hasattr(self.stock, "close"):
                 await self.stock.close()
+            await self.us_stock.close()
             await self.client.aclose()
 
     async def websocket(self):
@@ -213,18 +217,21 @@ class Runner:
             for provider, symbols in [
                 (self.crypto, self.cfg.market.crypto_symbols),
                 (self.stock, self.cfg.market.stock_symbols),
+                (self.us_stock, self.cfg.market.us_stock_symbols),
             ]:
                 if self.tournament_mode:
                     symbols = [s for s in symbols if s in market_universe(self.cfg)]
                 if not symbols:
                     continue
-                if provider is self.stock and (
-                    not self.stock.key or not self.stock.secret
+                if provider is not self.crypto and (
+                    not provider.key or not provider.secret
                 ):
                     for symbol in symbols:
                         self.symbol_status[symbol] = (
                             "KIWOOM_CREDENTIALS_MISSING"
                             if provider.name == "kiwoom"
+                            else "ALPACA_CREDENTIALS_MISSING"
+                            if provider is self.us_stock
                             else "CREDENTIALS_MISSING"
                         )
                     continue
@@ -349,36 +356,40 @@ class Runner:
 
     def prepare_tournament_symbol(self, symbol, histories):
         now = utcnow()
+        from .equity_sessions import window_status, session_open, context_fresh
+
+        scheduled = window_status(self.cfg, now)
+        if scheduled:
+            self.symbol_status[symbol] = scheduled
+            return []
+        if "/" not in symbol and not session_open(symbol, now, self.cfg):
+            self.symbol_status[symbol] = "MARKET_CLOSED"
+            return []
         if any(
             len(histories.get(tf, [])) < self.cfg.features.minimum_bars
             for tf in self.cfg.market.timeframes
         ):
             self.symbol_status[symbol] = "WARMING_UP"
             return []
-        if any(
-            is_stale(
-                b[-1],
-                now,
-                self.cfg.market.stale_multiplier,
-                self.cfg.market.future_tolerance_seconds,
-            )
-            for b in histories.values()
-        ):
+        if any(not context_fresh(b[-1], now, self.cfg) for b in histories.values()):
             self.symbol_status[symbol] = "DATA_STALE"
             return []
-        if "/" not in symbol:
-            from zoneinfo import ZoneInfo
-
-            local = now.astimezone(ZoneInfo(self.cfg.trading.timezone))
-            if local.weekday() >= 5 or not 540 <= local.hour * 60 + local.minute < 930:
-                self.symbol_status[symbol] = "MARKET_CLOSED"
-                return []
         bar = histories[self.cfg.strategy.timeframe][-1]
         with Session.begin() as db:
             tournament = db.get(Tournament, self.run_id)
             if tournament.status not in {"PENDING", "RUNNING"}:
                 return []
+            if (
+                tournament.status == "PENDING"
+                and self.cfg.tournament.start_market != "any"
+            ):
+                region = "us" if symbol in self.cfg.market.us_stock_symbols else "kr"
+                if region != self.cfg.tournament.start_market:
+                    self.symbol_status[symbol] = "WAITING_START_MARKET"
+                    return []
             start_tournament(db, tournament, now, self.cfg)
+            if tournament.status != "RUNNING":
+                return []
             state = build_state(
                 symbol, self.cfg.strategy.timeframe, histories, bar.end, self.cfg
             )

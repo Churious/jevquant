@@ -1,4 +1,6 @@
 import os
+import re
+from datetime import date, datetime
 from pathlib import Path
 
 import yaml
@@ -13,6 +15,9 @@ class StrictConfig(BaseModel):
 class Market(StrictConfig):
     crypto_symbols: list[str]
     stock_symbols: list[str]
+    us_stock_symbols: list[str] = Field(default_factory=list)
+    kr_holidays: list[str] = Field(default_factory=list)
+    us_holidays: list[str] = Field(default_factory=list)
     timeframes: list[str]
     history_bars: int = Field(ge=60, le=1000)
     poll_seconds: int = Field(gt=0)
@@ -26,6 +31,9 @@ class Trading(StrictConfig):
     base_currency: str = "KRW"
     timezone: str = "Asia/Seoul"
     allow_stock_shorts: bool = False
+    usd_krw: float | None = Field(default=None, gt=0)
+    fx_reference: str | None = None
+    allow_us_fractional: bool = False
     risk_per_trade: float = Field(gt=0, le=0.1)
     max_position_allocation: float = Field(gt=0, le=1)
     max_positions: int = Field(gt=0)
@@ -126,6 +134,23 @@ class TournamentSettings(StrictConfig):
     max_queued_jobs: int = Field(default=512, ge=6, le=10000)
     final_valuation: Literal["mark_to_market"] = "mark_to_market"
     equal_risk_budgets: bool = True
+    scheduled_start_at: str | None = None
+    scheduled_end_at: str | None = None
+    start_market: Literal["any", "kr", "us"] = "any"
+
+    @model_validator(mode="after")
+    def scheduled_window(self):
+        if bool(self.scheduled_start_at) != bool(self.scheduled_end_at):
+            raise ValueError("Scheduled tournaments require both start and end")
+        if self.scheduled_start_at:
+            start, end = map(
+                datetime.fromisoformat, (self.scheduled_start_at, self.scheduled_end_at)
+            )
+            if start.tzinfo is None or end.tzinfo is None or start >= end:
+                raise ValueError(
+                    "Scheduled window requires aware, increasing timestamps"
+                )
+        return self
 
 
 class Config(StrictConfig):
@@ -145,6 +170,23 @@ class Config(StrictConfig):
         from zoneinfo import ZoneInfo
 
         ZoneInfo(self.trading.timezone)
+        for value in self.market.kr_holidays + self.market.us_holidays:
+            date.fromisoformat(value)
+        if any(
+            not re.fullmatch(r"[A-Z][A-Z0-9.\-]{0,9}", s)
+            for s in self.market.us_stock_symbols
+        ):
+            raise ValueError("Invalid US stock/ETF symbol")
+        if set(self.market.stock_symbols) & set(self.market.us_stock_symbols):
+            raise ValueError("Duplicate regional stock symbols")
+        if (
+            self.market.us_stock_symbols
+            and self.trading.base_currency == "KRW"
+            and not self.trading.usd_krw
+        ):
+            raise ValueError(
+                "US stocks in KRW portfolios require a frozen USD/KRW rate"
+            )
         if self.trading.base_currency not in {"KRW", "USD"}:
             raise ValueError("supported account currencies: KRW, USD")
         if self.trading.base_currency == "KRW" and (
@@ -208,7 +250,7 @@ class Config(StrictConfig):
                 mode == "crypto"
                 and not self.market.crypto_symbols
                 or mode == "stock"
-                and not self.market.stock_symbols
+                and not (self.market.stock_symbols or self.market.us_stock_symbols)
             ):
                 raise ValueError("Selected market universe is empty")
         return self

@@ -1,0 +1,140 @@
+market:
+  crypto_symbols:
+  - BTC/KRW
+  - ETH/KRW
+  stock_symbols:
+  - 005930
+  - '000660'
+  - 069500
+  - '229200'
+  timeframes:
+  - 1m
+  - 5m
+  - 15m
+  - 1h
+  execution_timeframe: 1m
+  history_bars: 200
+  poll_seconds: 5
+  stale_multiplier: 2
+  future_tolerance_seconds: 5
+  us_stock_symbols:
+  - AAPL
+  - MSFT
+  - SPY
+  - QQQ
+  kr_holidays:
+  - '2026-10-05'
+  - '2026-10-09'
+  us_holidays: []
+trading:
+  starting_capital: 1000000
+  base_currency: KRW
+  timezone: Asia/Seoul
+  allow_stock_shorts: false
+  risk_per_trade: 0.005
+  max_position_allocation: 0.1
+  max_positions: 3
+  daily_loss_limit: 0.02
+  usd_krw: 1348.28
+  fx_reference: Frankfurter USD/KRW daily reference 2026-10-02
+  allow_us_fractional: true
+strategy:
+  version: jev-scalp-v2
+  timeframe: 1m
+  max_holding_minutes: 10
+  long_threshold: 0.75
+  short_threshold: 0.75
+  avoid_threshold: 0.35
+  min_setup_score: 3
+  max_reversal_score: 2
+  rsi_entry: 30
+  rsi_exit: 60
+risk:
+  atr_stop_multiplier: 1.5
+  reward_risk_ratio: 2.0
+simulation:
+  fee_rate: 0.001
+  slippage_bps: 5
+  min_net_target_return: 0.0005
+jev:
+  timeout_seconds: 3
+  attempts: 2
+  backoff_seconds: 1
+  input_cost_per_million: 0.042
+  max_evaluation_seconds: 8
+features:
+  minimum_bars: 60
+  structure_window: 24
+  volatility_window: 24
+  high_volatility: 0.025
+  low_volatility: 0.003
+  trend_slope: 0.001
+research:
+  forward_minutes:
+  - 1
+  - 3
+  - 5
+  - 15
+  - 60
+  - 240
+  - 1440
+  bucket_edges:
+  - 0.5
+  - 0.6
+  - 0.7
+  - 0.8
+  - 0.9
+  - 1.0
+  train_months: 2
+  validation_months: 1
+  embargo_hours: 24
+tournament:
+  enabled: true
+  state_precision_digits: 6
+  name: Jev 국내·미국 주식·ETF 월~금 대회
+  duration_days: 5
+  market_mode: stock
+  starting_capital_krw: 1000000
+  decision_cycle_budget_seconds: 50
+  max_queued_jobs: 512
+  final_valuation: mark_to_market
+  scheduled_start_at: '2026-10-05T09:30:00-04:00'
+  scheduled_end_at: '2026-10-09T16:00:00-04:00'
+  start_market: us
+traders:
+- id: jev-trend
+  name: Jev 추세
+  type: jev
+  strategy: trend
+- id: jev-momentum
+  name: Jev 모멘텀
+  type: jev
+  strategy: momentum
+- id: jev-breakout
+  name: Jev 돌파
+  type: jev
+  strategy: breakout
+- id: jev-reversion
+  name: Jev 평균 회귀
+  type: jev
+  strategy: mean_reversion
+- id: jev-multitf
+  name: Jev 다중 시간대
+  type: jev
+  strategy: multi_timeframe
+- id: jev-adaptive
+  name: Jev 적응형
+  type: jev
+  strategy: adaptive
+- id: baseline-buyhold
+  name: 매수 후 보유
+  type: baseline
+  strategy: buy_hold
+- id: baseline-ema
+  name: EMA 교차
+  type: baseline
+  strategy: ema
+- id: baseline-rsi
+  name: RSI 전략
+  type: baseline
+  strategy: rsi

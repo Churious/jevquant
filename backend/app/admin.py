@@ -24,7 +24,7 @@ def main():
             parser.error("실험을 찾을 수 없습니다")
         tournament = db.get(Tournament, args.run_id)
         if tournament:
-            if tournament.status == "COMPLETED" or (
+            if tournament.status in {"COMPLETED", "EXPIRED"} or (
                 args.action == "resume"
                 and tournament.ends_at
                 and utcnow() >= aware(tournament.ends_at)

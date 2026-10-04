@@ -1,7 +1,7 @@
 import "./globals.css";
 import Link from "next/link";
 export const metadata = {
-  title: "Jev Trading Tournament · 7일 가상거래 대회",
+  title: "Jev 투자 대회 · 읽기 전용 가상거래",
   description: "6개 Jev 투자 방식과 3개 기준 전략의 독립 100만 원 가상거래",
 };
 export default function Layout({ children }: { children: React.ReactNode }) {
@@ -13,7 +13,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
             jev<span> / 토너먼트</span>
           </Link>
           <div className="workspace">
-            7일 가상거래 대회<span>각 100만 원 · 읽기 전용</span>
+            Jev 가상거래 대회<span>각 100만 원 · 읽기 전용</span>
           </div>
           <nav>
             <Link href="/">대회 순위</Link>
