@@ -67,7 +67,7 @@ docker compose -f compose.yaml -f compose.local.yaml logs --tail 40 backend olla
 
 로컬 모드는 TypeSafe Jev 가중치를 설치하는 기능이 아닙니다. **System One `/v1/systemone` API를 지원하는 Tev 모델**을 사용하고 실제 모델 버전을 `local:` 접두사로 구분합니다. 일반 채팅 모델이 생성한 숫자로 판단 확률을 대신 만들지 않습니다. [Ollama 판단 API](https://docs.ollama.com/capabilities/decision), [Tev1](https://ollama.com/library/tev1).
 
-i7-8700 / RAM 16GB 환경을 고려해 CPU 모델과 동시 요청 1개를 기본으로 합니다. 현재 Windows Docker CPU 환경의 실제 시장 상태로 6개 질문 세트를 점검하여 모두 정상 응답을 확인했고 요청당 약 5.8–6.6초였습니다. Rocky 서버의 속도는 별도 측정이 필요합니다. **2종목 × 6개 스타일 = 분당 12개 요청**을 모두 시간 내에 처리할 수 있다고 보장하지 않습니다. 대시보드에서 실제 지연·대기 시간·정상 완료·마감 누락을 확인하세요. `python -m app.check_jev`는 기존 단일 연구 질문의 별도 점검이며 대회의 12개 요청 처리 능력을 측정하는 명령은 아닙니다.
+i7-8700 / RAM 16GB 환경을 고려해 CPU 모델과 동시 요청 1개를 기본으로 합니다. Windows Docker CPU 환경의 실제 시장 상태로 6개 질문 세트를 점검하여 모두 정상 응답을 확인했고 요청당 약 5.8–6.6초였습니다. 후속 Rocky i7-8700 서버 점검에서는 약 9.7–11초였으며, 새 대회 시작 전에 서버 전용 override로 요청 제한 15초·전체 평가 예산 16초를 기록했습니다. 기본 설정의 7초·8초는 그대로이므로 배포 전 실제 CPU 속도를 확인하세요. **2종목 × 6개 스타일 = 분당 12개 요청**을 모두 시간 내에 처리할 수 있다고 보장하지 않습니다. 대시보드에서 실제 지연·대기 시간·정상 완료·마감 누락을 확인하세요. `python -m app.check_jev`는 기존 단일 연구 질문의 별도 점검이며 대회의 12개 요청 처리 능력을 측정하는 명령은 아닙니다.
 
 ### TypeSafe 모드
 
