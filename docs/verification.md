@@ -59,3 +59,20 @@ docker compose -f compose.yaml -f compose.local.yaml up -d --build
 서버 시계가 약 96초 빠른 것을 발견하여 초기 대회를 일시정지하고 보존했습니다. chrony 설치·활성화 및 `NTPSynchronized=yes` 확인 후 새 ID `jev-tournament-7d-rocky-v3`로 시작했습니다. 서버 부팅 서비스는 시간 동기화를 기다린 뒤 세 Compose 파일로 실행하며 기존 다른 앱은 유지했습니다. 서버 재부팅 자체를 수행하지는 않았습니다.
 
 서버 대회 시작은 **2026-10-04 11:01:20.690978 KST**, 종료는 **2026-10-11 같은 시각**입니다. 실제 최초 9계정 스냅샷이 모두 1,000,000원이었고, 라이브 장부에서 6개 스타일의 정상 응답과 2개 가상 주문을 확인했습니다. LAN HTTP 및 읽기 API는 200을 반환했습니다. 이 후속 점검의 최종 브라우저 캡처는 검사 도구 연결 시간 초과로 완료하지 못했습니다. KIS 인증 시세와 실제 7일 성과는 여전히 미검증입니다.
+
+## 후속 키움 국내주식·ETF 대회 준비
+
+같은 서버에서 기존 `jev-tournament-7d-rocky-v3`를 PAUSED로 보존하고, 전환 전 PostgreSQL 백업을 남겼습니다. 새 ID는 `jev-tournament-7d-kiwoom-kr-v1`이며 삼성전자·SK하이닉스·KODEX 200·KODEX 코스닥150만 포함합니다. 키움 REST 시세 어댑터를 배포하고 frontend production build를 완료했습니다.
+
+신청·키 발급 전이므로 읽기 API에서 새 대회는 **PENDING**, 네 종목 모두 **KIWOOM_CREDENTIALS_MISSING**, 시작·종료 시각은 null입니다. 9개 참가자의 현금·평가액은 각각 정확히 1,000,000원이며 판단 작업은 0개입니다. 실제 키움 인증·시세 연결과 국내주식 체결 성과는 검증하지 못했습니다. 키 입력 후 유효한 시세와 시간대별 문맥이 준비된 실제 장중에 시작합니다.
+
+서버 전체 테스트는 **97 passed in 29.95s**입니다. 테스트가 BTC fixture를 사용하는데 운영 설정은 국내주식 전용이므로, 먼저 저장소 기본 설정을 컨테이너의 별도 경로에 복사하고 해당 경로만 테스트 프로세스에 지정했습니다. 운영 설정·서비스 환경·실제 장부는 변경하지 않았습니다. 운영 설정을 그대로 사용한 최초 실행에서는 이 불일치로 3개 테스트가 실패했습니다.
+
+```bash
+docker compose -f compose.yaml -f compose.local.yaml -f data/compose.server.yaml cp config.yaml backend:/tmp/jevquant-test-config.yaml
+docker compose -f compose.yaml -f compose.local.yaml -f data/compose.server.yaml exec -T -e CONFIG_PATH=/tmp/jevquant-test-config.yaml backend pytest -q
+```
+
+인증 필드·토큰 갱신·차트 연속 조회·요청 제한·부호 있는 가격·마감된 봉 집계·오류 비밀값 보호와 서버 키 입력 도구는 가짜 응답/임시 파일로 검증했습니다. 백엔드·프런트엔드·DB healthy, 부팅 서비스 active/enabled, NTPSynchronized=yes를 확인했습니다. 로컬 앱 서비스는 계속 중지 상태입니다. 새 배포 화면의 브라우저 시각 검증은 완료하지 못했으며 상태·잔고는 HTTP API로 검증했습니다.
+
+국내 4종목은 6개 Jev에 분당 24개 작업을 생성합니다. 같은 CPU와 동시 요청 1개로 모두 처리할 수 없으며 마감 누락을 기록합니다. 새 대회에서도 참가자 질문·threshold·리스크를 임의 변경하지 않았습니다. 신청·키 입력 방법은 [키움 설정 안내](kiwoom.md)를 참조하세요.
