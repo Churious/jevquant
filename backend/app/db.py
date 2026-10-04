@@ -1,7 +1,7 @@
 import os
 from datetime import datetime, timezone
 
-from sqlalchemy import DateTime, Integer, JSON, String, create_engine
+from sqlalchemy import DateTime, Integer, JSON, String, ForeignKey, create_engine
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
 
@@ -20,6 +20,13 @@ class Base(DeclarativeBase):
     pass
 
 
+class ExperimentScope:
+    tournament_id: Mapped[str | None] = mapped_column(
+        ForeignKey("tournaments.id"), nullable=True, index=True
+    )
+    trader_id: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
+
+
 class SystemEvent(Base):
     __tablename__ = "system_events"
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
@@ -31,3 +38,6 @@ class SystemEvent(Base):
 
 def init_db():
     Base.metadata.create_all(engine)
+    from .migrations import migrate
+
+    migrate(engine)

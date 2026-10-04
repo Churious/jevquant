@@ -1,220 +1,237 @@
-# Jev 가상거래 연구실
+# Jev Trading Tournament
 
-실제 시세를 관찰하면서 **전략별 가상 자금 1,000,000 KRW**로 Jev의 판단 확률을 검증하는 연구 시스템입니다. 서버 시작 시 자동으로 데이터 수집과 paper trading을 시작합니다. 웹은 **한글·읽기 전용**이며 모바일 화면에 대응합니다.
+여러 Jev 투자자에게 **각각 1,000,000원의 독립 가상 자금**을 지급하고, 동일한 실제 시장 데이터에서 **7일 동안 paper trading**하게 하여 Jev를 이용한 투자 방식이 수익을 낼 수 있는지, 어떤 방식이 가장 높은 성과를 내는지 비교하는 실시간 실험 플랫폼입니다.
 
-> This project is an experimental paper-trading research system.
-> It does not place real financial orders.
+실제 주문을 전송하지 않습니다. 웹은 **한글·읽기 전용·모바일 대응**이며 서버가 시작되면 시세 수집과 가상거래를 자동으로 실행합니다. 수익이나 우승자는 실제 대회 결과로 확인합니다.
 
-## 실행과 Docker 배포
+## Tournament
 
-Linux x86_64 서버는 Docker Engine과 Compose 플러그인, Windows는 Docker Desktop의 Linux containers를 사용합니다. 이 폴더에서 실행합니다.
+기본 참가자는 Jev 6개와 기준 전략 3개입니다. 현금, 포지션, 손익, 거래 이력, 일일 손실 한도와 전략 설정을 각각 보관합니다. 총 900만 원의 가상 장부가 있으며 계정 사이의 자금 이동은 없습니다.
 
-```bash
-cp .env.example .env
-# .env에 TypeSafe 키와 한국투자증권 시세 API 키를 입력
-docker compose up -d
-docker compose ps
-```
+첫 유효 시장 상태가 준비되면 `PENDING → RUNNING`으로 전환하고 그 시각부터 정확히 7일을 계산합니다. `PAUSED` 상태에서도 종료 시각은 연장하지 않습니다. 종료 시 **마지막 확정 1분봉 종가로 mark-to-market 평가**하고 `COMPLETED` 보고서를 한 번 저장합니다. 종료 이후에는 진입·청산·가격 갱신·자산 스냅샷 생성을 중단합니다. 열린 포지션은 최종 가격에 고정하며 가상의 청산 비용을 추가 차감하지 않습니다. 오래된 평가 시세는 보고서에 표시합니다.
 
-첫 실행에 이미지를 빌드합니다. 변경 사항을 반영할 때는 `docker compose up -d --build`를 사용합니다. 기본 주소는 [대시보드](http://localhost:3000), [API 문서](http://localhost:8000/docs)입니다. 키가 없어도 웹과 Upbit 데이터 수집은 실행됩니다. Jev는 키가 없으면 관망하고, 국내 종목은 시세 키 필요 상태를 표시합니다. 합성 데이터로 실적을 채우지 않습니다.
+대회 시작 전에 설정, 질문, 판단 정책, 제공자, 모델, 동시 요청 수를 해시와 함께 저장합니다. 같은 ID로 설정을 바꾸면 시작을 거절합니다. 설정을 바꾸거나 새 실험을 할 때에는 **새 `LAB_TOURNAMENT_ID`**를 사용하세요. 재시작은 기존 잔고와 종료 시각을 이어갑니다.
 
-모바일에서 서버에 접속하려면 서버의 `.env`에서 `DASHBOARD_BIND_ADDRESS=0.0.0.0`으로 설정하고 `docker compose up -d`를 실행한 후 `http://서버LAN주소:3000`에 접속합니다. 외부 공개는 별도 HTTPS 리버스 프록시를 사용할 수 있습니다. 백엔드 포트는 localhost에만 바인딩하고 PostgreSQL은 Docker 내부에서만 접근합니다.
+## Jev Traders
 
-자동 시작은 `LAB_AUTOSTART=true`, 재시작 정책은 `unless-stopped`입니다. Docker 서비스 자체가 부팅 시 시작되도록 서버에서 설정해야 합니다. 별도 서버 로그인·배포는 이 저장소에 포함되지 않으며 이 환경에서는 로컬 Docker로 검증했습니다.
+| ID | 참가자 | 모델의 주요 판단 |
+| --- | --- | --- |
+| `jev-trend` | 추세 | 방향, 추세 강도, 지속 품질, 반전 위험 |
+| `jev-momentum` | 모멘텀 | 방향, 가속 강도, 지속 가능성, 소진 위험 |
+| `jev-breakout` | 돌파 | 방향, 돌파 품질, 거래량·구조 확인, 가짜 돌파 위험 |
+| `jev-reversion` | 평균 회귀 | 과도한 움직임, 회귀 방향·품질, 추세 역행 위험 |
+| `jev-multitf` | 다중 시간대 | 단기·상위 방향, 시간대 정합성, 셋업 품질, 반전 위험 |
+| `jev-adaptive` | 적응형 | 시장 국면, 적합 행동, 셋업 품질, 반전 위험 |
+| `baseline-buyhold` | 매수 후 보유 | 모델 호출 없이 종목별 최대 배분으로 매수 후 유지 |
+| `baseline-ema` | EMA 교차 | 모델 호출 없이 EMA9 / EMA21 조건 |
+| `baseline-rsi` | RSI | 모델 호출 없이 과매도 진입·회복 청산 |
 
-## 로컬 판단 모드 · Linux / Windows
+각 Jev 참가자는 별도 질문 세트를 별도 요청으로 전송합니다. 동일 모델 서버를 공유해도 응답 하나를 여러 참가자가 재사용하지 않습니다. 공통 `avoid_trade`, `long_setup`, `short_setup` 확률도 보존하여 관망과 확률 검증에 사용합니다. 적응형의 국면이 `UNCERTAIN` 또는 `HIGH_VOLATILITY`이면 관망합니다. 다중 시간대 전략은 기계적으로 모든 방향의 일치를 요구하지 않고 Jev가 정합성을 평가합니다.
 
-`JEV_PROVIDER=local`은 **Jev의 `/v1/systemone` API를 지원하는 로컬 판단 서버**를 사용합니다. TypeSafe Jev의 가중치를 설치하는 기능은 아닙니다. Ollama 0.35.0 이상에서 지원하는 Tev1 / Nimble 등 별도 판단 모델을 연결하며, 실제 모델 이름과 `local:` 접두사를 기록합니다. 일반 채팅 모델의 생성한 숫자를 판단 확률로 대신 사용하지 않습니다. [Ollama 공식 판단 API](https://docs.ollama.com/capabilities/decision), [Tev1 모델](https://ollama.com/library/tev1).
+## Leaderboard
 
-주신 i7-8700 / RAM 16GB / 내장 그래픽 서버를 위한 기본값은 CPU에서 실행하는 **`tev1:0.8b`**입니다. 모델 다운로드는 약 0.8GB이며 GPU가 필요하지 않습니다. 이 사양에서의 실제 속도·거래 성과는 아직 측정하지 않았습니다. 4B 모델도 선택할 수 있지만 먼저 작은 모델로 실제 입력의 응답 시간을 확인하세요.
+메인 화면은 남은 시간 → 평가액 순위 → 참가자 자산곡선 → 보유 포지션 → 최근 판단 순서입니다. 순위에는 평가액, 순손익, 수익률, 오늘 손익, 최대 낙폭, 승률, 손익비, 완료 거래 수와 현재 노출을 표시합니다. 같은 평가액은 공동 순위입니다. 그래프는 모두 **0.00%**에서 출발하며 원화 평가액으로 전환할 수 있습니다.
 
-Linux Bash에서 처음 설정할 때:
+참가자를 클릭하면 개별 자산곡선, 현재 포지션, 판단·체결 상태, 거래 이력과 고정된 설정을 볼 수 있습니다. 노출은 가상자산 / 한국 주식·ETF로 구분하며 투자 시간 비율, 시간 가중 평균 노출, 최대 노출, 거래대금과 수수료를 기록합니다. 거래대금은 진입·청산 명목금액 합계입니다.
+
+결과 페이지는 최고·최저 Jev, 최고 기준 전략, **최고 Jev − 최고 기준 전략의 %p 차이**, Jev 평균·중앙 수익률, 전체 순위, 비용과 위험 대비 성과 순위를 표시합니다. Jev가 기준 전략보다 낮은 성과를 내도 그대로 보여줍니다. 위험 대비 점수는 대회 수익률 / 최대 낙폭이며 낙폭 0이면 계산하지 않습니다. 7일 관측으로 30일 샤프 지수를 만들지 않습니다.
+
+## Quick Start · Linux / Windows
+
+Linux x86_64는 Docker Engine과 Compose 플러그인, Windows는 Docker Desktop의 **Linux containers**를 사용합니다. 이 저장소 폴더에서 실행합니다.
+
+### 로컬 CPU 판단 모드
+
+Linux Bash:
 
 ```bash
 cp .env.example .env
 docker compose -f compose.yaml -f compose.local.yaml up -d --build
 ```
 
-Windows PowerShell에서 처음 설정할 때:
+Windows PowerShell:
 
 ```powershell
 Copy-Item .env.example .env
 docker compose -f compose.yaml -f compose.local.yaml up -d --build
 ```
 
-이미 `.env`가 있으면 복사 단계를 건너뛰고 기존 시세 키를 유지합니다. 로컬 모드에는 TypeSafe 키가 필요하지 않습니다. 첫 실행에는 Ollama와 모델을 다운로드하고 다운로드가 완료된 뒤 가상거래 서버를 시작합니다. 이후 모델은 `ollama_models` 볼륨에서 재사용합니다. 웹은 같은 한글 읽기 전용 대시보드이며 운영 현황에 실행 방식·모델을 표시합니다. 시작 자금 100만 원과 1분 판단·기존 리스크 설정을 사용합니다.
+이미 `.env`가 있으면 복사하지 말고 기존 키를 유지합니다. Ollama **0.35.0**과 **`tev1:0.8b`**를 다운로드한 뒤 백엔드가 시작합니다. 모델은 `ollama_models` 볼륨에서 재사용하며 한 모델만 로드하도록 설정했습니다. 로컬 모드의 기본 대회 ID는 `jev-tournament-7d-local-v2`입니다. TypeSafe 키는 필요하지 않습니다. 시세 수집에는 인터넷이 필요합니다.
 
-두 OS에서 같은 명령으로 상태와 실제 시장 입력의 응답을 확인합니다. 점검 호출은 가상거래 장부에 저장하지 않습니다.
+[대시보드](http://localhost:3000) · [API 문서](http://localhost:8000/docs)
 
 ```bash
 docker compose -f compose.yaml -f compose.local.yaml ps -a
-docker compose -f compose.yaml -f compose.local.yaml logs --tail 30 local-model ollama
-docker compose -f compose.yaml -f compose.local.yaml exec backend python -m app.check_jev
+docker compose -f compose.yaml -f compose.local.yaml logs --tail 40 backend ollama local-model
 ```
 
-로컬 모드에서도 판단 전체 예산은 8초이며 로컬 요청당 제한은 기본 7초입니다. `LOCAL_JEV_TIMEOUT_SECONDS`로 요청 제한을 조정해도 전체 판단 예산은 넘지 않습니다. 초기 로딩이나 CPU 추론이 제한을 넘으면 해당 판단을 관망합니다. 기본 동시 요청은 1개이며 전기·장비 비용은 API 비용 표시와 별도입니다. `check_jev`가 반복해서 실패하면 Ollama 로그·지원 버전·모델 이름·응답 시간을 확인하세요. 손절·수량 계산은 기존 일반 코드가 담당합니다.
+로컬 모드는 TypeSafe Jev 가중치를 설치하는 기능이 아닙니다. **System One `/v1/systemone` API를 지원하는 Tev 모델**을 사용하고 실제 모델 버전을 `local:` 접두사로 구분합니다. 일반 채팅 모델이 생성한 숫자로 판단 확률을 대신 만들지 않습니다. [Ollama 판단 API](https://docs.ollama.com/capabilities/decision), [Tev1](https://ollama.com/library/tev1).
 
-모델을 바꿀 때는 `.env`의 다음 **두 값**을 함께 바꾸고 같은 로컬 실행 명령을 사용합니다. 새 실험은 전략마다 100만 원에서 시작하며 이전 결과는 DB에 보존됩니다.
+i7-8700 / RAM 16GB 환경을 고려해 CPU 모델과 동시 요청 1개를 기본으로 합니다. 현재 Windows Docker CPU 환경의 실제 시장 상태로 6개 질문 세트를 점검하여 모두 정상 응답을 확인했고 요청당 약 5.8–6.6초였습니다. Rocky 서버의 속도는 별도 측정이 필요합니다. **2종목 × 6개 스타일 = 분당 12개 요청**을 모두 시간 내에 처리할 수 있다고 보장하지 않습니다. 대시보드에서 실제 지연·대기 시간·정상 완료·마감 누락을 확인하세요. `python -m app.check_jev`는 기존 단일 연구 질문의 별도 점검이며 대회의 12개 요청 처리 능력을 측정하는 명령은 아닙니다.
 
-```dotenv
-LOCAL_JEV_MODEL=tev1:4b
-LOCAL_LAB_RUN_ID=krw-local-tev4-1m-v1
+### TypeSafe 모드
+
+`.env`에 `TYPESAFE_API_KEY`를 입력하고 다음을 실행합니다. 기본 제공자·모델은 기존 **`typesafe` / `jev-1.13.0`**를 유지합니다.
+
+```bash
+docker compose build
+docker compose up -d
 ```
 
-기본 로컬 실험 ID는 `krw-local-tev08-1m-v1`입니다. 제공자·서버 주소·모델을 변경하면서 같은 실험 ID를 재사용하면 서버가 시작을 거절합니다. 로컬 서비스는 Docker 내부 통신만 사용하고 Ollama 포트를 호스트에 공개하지 않습니다. 시세 수집에는 여전히 인터넷과 필요한 시세 키가 필요합니다.
+기본 대회 ID는 `jev-tournament-7d-v1`입니다. 키가 없으면 Jev는 관망하며 기준 전략과 public 시세 수집은 계속됩니다. 로컬 대회와 다른 ID를 사용하므로 장부를 혼합하지 않습니다.
 
-별도로 운영하는 System One 호환 서버도 연결할 수 있습니다. 백엔드 **프로세스가 접근할 수 있는 주소**를 지정합니다. 아래는 Ollama와 Python 백엔드를 같은 OS에서 실행하는 경우입니다. Bash는 `export`, PowerShell은 `$env:이름='값'`으로 설정합니다. 직접 Python 실행은 `.env`를 자동으로 읽지 않습니다.
+### 서버·모바일 접속
 
-```dotenv
-JEV_PROVIDER=local
-JEV_BASE_URL=http://localhost:11434
-JEV_MODEL=tev1:0.8b
-LOCAL_JEV_API_KEY=
-LAB_RUN_ID=krw-local-native-1m-v1
-```
+기본 바인딩은 localhost입니다. 서버 `.env`에 `DASHBOARD_BIND_ADDRESS=0.0.0.0`을 설정한 후 같은 Compose 명령을 실행하면 `http://서버LAN주소:3000`으로 접속할 수 있습니다. 외부 접속에는 HTTPS 리버스 프록시를 구성할 수 있습니다. 백엔드는 localhost, DB와 Ollama는 Docker 내부 통신을 사용합니다. Docker 자체가 서버 부팅 시 실행되도록 설정하면 `unless-stopped` 정책으로 이어서 실행합니다.
 
-`JEV_BASE_URL`은 기본 주소, `/v1` 또는 `/v1/systemone`으로 끝나는 주소를 지원합니다. Docker의 `localhost`는 컨테이너 자신을 가리킵니다. 호스트 주소와 바인딩 차이를 피하려면 통합 Docker 모드를 사용하세요. 인증을 요구하는 자체 서버에는 `LOCAL_JEV_API_KEY`를 사용하며 TypeSafe 키는 로컬 서버에 보내지 않습니다. 응답 장애 때 다른 제공자로 자동 전환하지 않습니다.
-
-TypeSafe 모드로 돌아갈 때는 기존 `.env`의 `JEV_PROVIDER=typesafe`, TypeSafe 주소·모델·키를 사용하고 `docker compose up -d --build`를 실행합니다. 로컬 모드 중지에도 같은 `-f compose.yaml -f compose.local.yaml` 옵션을 사용합니다. `down`은 모델 볼륨을 보존합니다. `down -v`는 연구 DB와 다운로드한 모델을 삭제하므로 사용하지 않습니다.
-
-## 아키텍처
+## Architecture
 
 ```text
-Upbit / 한국투자증권 시세
- → 확정 OHLCV 저장 → Python 지표·시장 국면 계산
- → 압축 Market State → Jev의 8개 독립 판단
- → 결정론적 전략 → 리스크 검증 → 내부 PaperBroker
- → 독립 포트폴리오·주문·거래·후속 수익률 저장
- → 읽기 전용 FastAPI → Next.js 한글 대시보드
+Upbit / KIS 시세 → 확정 OHLCV → 공통 FeatureSnapshot
+                                ├─ Jev별 독립 질문 → 제한된 작업 큐 → 모델 Worker
+                                └─ 기준 전략 → 결정론적 신호
+각 신호 → 기존 리스크·PaperBroker → 독립 계정·포지션·주문·거래
+        → 자산 스냅샷·7일 최종 보고서·후속 수익률
+        → 읽기 전용 FastAPI → Next.js 한글 대시보드
 ```
 
-Python 3.12, FastAPI, asyncio, Pydantic, SQLAlchemy, PostgreSQL 17(JSONB), Next.js, TypeScript, Tailwind와 Recharts를 사용합니다. 계산·회계·주문 수량·손절·통계는 일반 코드가 담당합니다. Jev는 글을 생성하거나 주문을 보내지 않습니다. Redis는 현재 필요하지 않아 포함하지 않았습니다.
+기존 시장 공급자, feature 계산, Jev HTTP 어댑터, PaperBroker, 회계, 리스크, 통계와 연구 장부를 재사용했습니다. 시장 데이터와 확정 feature는 공유하고, 모델 판단·계정·설정은 참가자별로 분리합니다. 시세 루프와 모델 worker는 별도 asyncio 작업이므로 느린 추론을 기다리며 시세 처리를 멈추지 않습니다. 큐는 프로세스 내부에 있으며 재시작 시 중단된 판단을 `INTERRUPTED` 관망으로 기록합니다.
 
-파일: `backend/app/market.py` 데이터 인터페이스, `korean_market.py` 한국 공급자, `features.py` 지표, `jev.py` 질문·응답 검증, `trading.py` 전략·리스크·브로커, `runner.py` 실시간 실행, `research.py` 통계, `replay.py` 과거 실험, `frontend/app` 웹.
+Python 3.12 / FastAPI / SQLAlchemy / PostgreSQL 17 / Pydantic / httpx / numpy / Next.js / TypeScript / Tailwind / Recharts를 사용합니다. GPU와 Redis는 필수가 아닙니다. 종목 수집, 거래 수량, 손절·익절, 통계는 일반 코드가 처리합니다.
 
-## 환경변수와 설정
-
-| 변수 | 기본값 / 용도 |
+| 파일 | 역할 |
 | --- | --- |
-| `TYPESAFE_API_KEY` | 서버 전용 Jev API 키 |
-| `JEV_PROVIDER` | `typesafe` 또는 `local`, 기본 `typesafe` |
-| `JEV_BASE_URL` | 비우면 TypeSafe `https://api.typesafe.ai` / local `http://localhost:11434` |
-| `JEV_MODEL` | 비우면 TypeSafe `jev-1.13.0` / local `tev1:0.8b` |
-| `LOCAL_JEV_API_KEY` | 인증이 필요한 자체 로컬 서버의 키; Ollama는 불필요 |
-| `JEV_CONCURRENCY` | 비우면 TypeSafe 4 / local 1, 허용 범위 1–8 |
-| `LOCAL_JEV_TIMEOUT_SECONDS` | 로컬 요청 제한 7초, 항상 전체 판단 예산 내에서 적용 |
-| `LOCAL_JEV_MODEL` / `LOCAL_LAB_RUN_ID` | 로컬 Compose의 모델·독립 실험 ID |
-| `CRYPTO_DATA_PROVIDER` | `upbit` |
-| `CRYPTO_API_KEY` | 기본 public 시세에는 불필요, Compose에 전달하지 않음 |
-| `STOCK_DATA_PROVIDER` | `kis` |
-| `STOCK_API_KEY` / `STOCK_API_SECRET` | 한국투자증권 App Key / App Secret, 시세 조회만 사용 |
-| `LAB_MODE` | `LIVE_PAPER`; `REPLAY`는 실시간 worker 대기 |
-| `LAB_AUTOSTART` | `true` |
-| `LAB_RUN_ID` | `krw-scalp-1m-v2`; 설정 변경 실험에는 새 ID 사용 |
-| `POSTGRES_PASSWORD` | 로컬 개발 기본값, 서버에서 변경 가능 |
-| `DASHBOARD_BIND_ADDRESS` | `127.0.0.1`; LAN 공개 시 `0.0.0.0` |
+| `market.py`, `korean_market.py`, `features.py` | 기존 시세·확정 봉·지표 |
+| `traders.py`, `config.py` | 선언형 참가자·질문·판단 정책·모델 상속 |
+| `tournament.py`, `tournament_api.py` | 대회 수명·순위·최종 평가·읽기 API |
+| `decision_queue.py`, `runner.py` | 공통 상태 fan-out·예산·독립 작업 큐 |
+| `trading.py` | 기존 브로커·독립 계정·리스크·체결 |
+| `migrations.py` | 기존 PostgreSQL / SQLite 장부 migration |
+| `research.py`, `replay.py`, `tournament_replay.py` | 분석·캐시·재현·walk-forward |
 
-종목·시간대·전략 임계값·ATR 배수·수수료·슬리피지·리스크 한도는 `config.yaml`에서 관리합니다. `.env`, `*.key`, `secrets/`, `data/`는 Git 제외 대상입니다. 브라우저에는 키를 전달하지 않습니다.
+변경 전 구조 분석은 [docs/architecture-analysis.md](docs/architecture-analysis.md)에 있습니다.
 
-기본 종목은 BTC/KRW, ETH/KRW, 삼성전자(005930), SK하이닉스(000660), KODEX 200(069500), KODEX 코스닥150(229200)입니다. 기본 전략은 **확정된 1분봉마다 Jev 판단을 한 번 실행**하는 단타입니다. 5분·15분·1시간 봉은 추세 문맥으로만 사용합니다. 수집 루프는 5초 간격으로 확인하며, WebSocket 봉 완료 알림도 루프를 깨웁니다. 상위 봉은 다음 확정 시각까지 캐시합니다. 종목별 판단은 최대 4개 동시 요청으로 처리합니다. 정확한 분 경계 실행이나 지연 없는 처리를 보장하지 않으며, 수집·네트워크·API 지연을 포함합니다. KRW 모드에서는 원화 거래쌍과 국내 6자리 종목 코드만 허용합니다.
+## 설정·판단 예산
 
-기존 15분 실험 `krw-live-v1` 기록은 보존하고 새 단타 실험 `krw-scalp-1m-v2`를 시작합니다. 기존 `.env`가 있으면 `LAB_RUN_ID=krw-scalp-1m-v2`로 바꾼 후 `docker compose up -d --build`를 실행합니다. 설정이 다른 기존 실험 ID에 결과를 덮어쓰지 않습니다.
+`config.yaml`에서 참가자를 선언합니다. 기본 참가자 모두 전역 제공자와 모델을 상속하며 동일한 리스크 예산을 사용합니다.
 
-## 시장 데이터 공급자
-
-**Upbit:** 인증 없는 분봉 REST와 public 캔들 WebSocket을 사용합니다. WebSocket으로 봉 완료를 감지하면 REST에서 확정 봉을 읽습니다. 연결 장애 중에도 정기 REST 수집은 계속됩니다. REST 호출은 WebSocket 확인과 공유하는 잠금으로 제한합니다. 현재가는 마지막 확정 1분봉 종가이고, 24시간 변화율의 비교 가격은 그 시각의 24시간 전 마지막 확정 5분봉입니다. 비교 시각 오차가 5분 이상이면 표시하지 않습니다. 빈 봉을 만들거나 가격을 보간하지 않습니다. 거래가 없어 빠진 봉은 진입용 feature 생성에서 거절합니다.
-
-**한국투자증권:** OAuth 토큰 발급과 `/uapi/domestic-stock/v1/quotations/inquire-time-dailychartprice` GET만 구현합니다. 계좌번호, 주문 거래번호, 주문 경로는 사용하지 않습니다. KRX 1분봉을 사용하고 장 시작 09:00 KST 기준으로 5분·15분·1시간 문맥도 집계합니다. 구성 분봉이 모두 있을 때만 집계하며 15:00~15:30의 불완전 1시간 봉은 제외합니다. 과거 문맥은 백그라운드로 준비하므로 초기 준비에 수 분이 걸릴 수 있습니다. 장 시작 직후에는 새 상위 봉이 아직 없어 stale로 관망할 수 있습니다. 키·API 이용 권한은 공급자 계정에서 준비해야 합니다. 실키를 제공받지 않아 인증을 포함한 실제 국내 시세 호출은 검증하지 않았고 HTTP mock으로 테스트했습니다. 휴일에 영업시간 봉이 없으면 stale 판정으로 진입을 막습니다. 거래소 휴일 캘린더는 아직 연동하지 않았습니다.
-
-기존 Binance public 데이터 전용 호스트와 Alpaca 데이터 호스트 구현도 보존했습니다. 대체 공급자를 사용할 때에는 기준 통화와 종목 구성을 일치시키고 새 실험 ID를 사용해야 합니다. 환율 변환은 구현하지 않았습니다.
-
-공식 문서 확인(2026-10-03): [TypeSafe HTTP API](https://docs.typesafe.ai/api), [현재 모델·가격](https://docs.typesafe.ai/models), [Python SDK](https://docs.typesafe.ai/sdk/python), [Upbit REST](https://docs.upbit.com/kr/reference/list-candles-minutes), [Upbit WebSocket](https://docs.upbit.com/kr/reference/websocket-candle), [KIS 공식 예제](https://github.com/koreainvestment/open-trading-api/blob/main/examples_llm/domestic_stock/inquire_time_dailychartprice/inquire_time_dailychartprice.py).
-
-## Jev 연동
-
-공식 HTTP API `POST /v1/systemone`에 `model`, `state`, `questions`를 보냅니다. SDK 버전 추측을 피하기 위해 httpx를 이용한 HTTP 어댑터를 구현했습니다. 질문은 Choice 1개, Score 4개, Noul 3개입니다. Score는 0~4의 확률 가중 값으로 평가하며 임의 반올림하지 않습니다. Noul과 Choice/Score의 확신도를 구분합니다.
-
-원본 요청, 각 재시도 응답, 원본 응답, 확률·legend·confidence, 반환된 모델 버전, 지연, 실제 요청 수와 가능한 비용을 저장합니다. 확률 범위·합계·옵션·타입·필수 응답이 유효하지 않으면 관망합니다. 429/529와 일시 장애는 제한된 지수 백오프로 재시도합니다. 알 수 없는 과금은 0으로 표시하지 않습니다. 추정 가격은 설정값이며 공급자 청구서와 다를 수 있습니다. 키 추가 후 다음 새 전략 봉부터 판단을 수집합니다.
-
-단타 기본값은 요청 제한 3초, 최대 2회 시도, 전체 판단 시간 예산 8초입니다. `Retry-After`가 남은 시간 예산보다 길면 추가 호출하지 않고 관망하여 다른 분의 판단을 막지 않습니다. 빠른 응답이 수익 우위를 보장하지는 않습니다. 셋업 확률은 거래 승률이 아니며 실시간 가상거래와 미사용 데이터로 검증합니다.
-
-## 가상 체결과 리스크
-
-각 전략은 독립된 100만 원 계정을 갖습니다. 위험 예산 0.5%, 종목 배분 최대 10%, 동시 포지션 3개, 일일 손실 한도 2%를 적용합니다. 일일 한도는 KST 기준 미실현 손익을 포함하며 당일 회복해도 자동 해제되지 않습니다. 다음 날 새 기준으로 재평가합니다. 국내 주식·ETF는 정수 주만 체결하고 공매도는 기본 금지합니다. 비싼 종목은 최대 배분으로 1주도 살 수 없으면 수량 미달로 거절합니다.
-
-신호 응답이 알려진 이후 처음 이용 가능한 **1분봉 시가**에 불리한 슬리피지를 적용하고 진입·청산 수수료를 각각 차감합니다. 응답 전에 시작한 봉의 시가에는 진입하지 않습니다. 같은 시각의 여러 종목은 모두 시가에 진입 처리를 끝낸 뒤 고가·저가·종가로 평가하여 다른 종목의 미래 종가를 수량 계산에 사용하지 않습니다. ATR 손절과 기본 1:2 익절, 갭 손절, 같은 봉의 손절 우선 처리를 구현했습니다. **확정 OHLCV로 체결을 재구성하므로 체결·손절 기록은 해당 봉이 확정된 뒤 반영됩니다. 틱·호가 기반 즉시 체결 시스템은 아닙니다.** 공매도 가상 포지션은 진입 명목금액을 담보로 예약합니다.
-
-단타 전략은 목표 익절폭이 예상 왕복 비용과 최소 순수익 여유를 넘을 때만 진입합니다. 기본 수수료 0.1%/편도와 슬리피지 5bp/편도로 예상 왕복 비용은 0.30%, 추가 여유는 0.05%입니다. 따라서 예상 익절폭 0.35% 이하는 `COST_FILTER`로 거절합니다. 공급자 실제 비용이나 호가 스프레드를 측정한 값은 아니므로 계정·종목별 실제 조건에 맞춰 설정해야 합니다. 이 필터는 손절 가능성을 포함한 기대 수익률을 예측하지 않습니다.
-
-매수 후 보유를 제외한 Jev·EMA·RSI는 기본 최대 10분 보유 후 다음 처리 가능한 1분봉 시가에 청산합니다. 국내 종목은 KST 15:20부터 신규 진입을 제한하고 보유 포지션을 청산합니다. 시간 청산한 봉에서는 같은 종목에 재진입하지 않습니다. 데이터 장애나 봉 누락 중에는 청산 기록이 늦어질 수 있습니다.
-
-비교 전략은 배분 한도를 적용한 매수 후 보유, EMA9/21 교차, RSI, Jev입니다. 모든 계정의 시작금·입력·비용·한도는 같습니다. 매수 후 보유는 수동 보유 기준선으로 손절·익절 없이 보유합니다. 전체 자금을 지수에 투자하는 100% buy-and-hold 수익률과는 다르며 노출·보유 기간의 차이를 감안해야 합니다.
-
-웹에는 매매·설정·제어를 위한 쓰기 경로가 없습니다. 필요하면 서버에서만 관리합니다.
-
-```bash
-docker compose exec backend python -m app.admin pause
-docker compose exec backend python -m app.admin resume
+```yaml
+tournament:
+  enabled: true
+  state_precision_digits: 6
+  duration_days: 7
+  market_mode: crypto  # crypto / stock / mixed
+  starting_capital_krw: 1000000
+  decision_cycle_budget_seconds: 50
+  final_valuation: mark_to_market
+traders:
+  - id: jev-trend
+    name: Jev 추세
+    type: jev
+    enabled: true
+    starting_capital: 1000000
+    strategy: trend
+    provider: inherit
+    model: inherit
+    parameters:
+      entry_probability: 0.75
+      avoid_probability: 0.35
+      min_quality: 3
+      max_risk: 2
+      atr_stop_multiplier: 1.5
+      reward_risk_ratio: 2.0
+      max_holding_minutes: 10
 ```
 
-일시정지는 새 포지션을 막고 기존 포지션의 손절·익절 감시를 계속합니다. 저장된 일시정지는 재시작 뒤에도 유지됩니다. 새 기본 실험은 시작 시 자동 실행합니다.
+목록은 실제 파일의 9개 참가자를 유지하세요. 모델에 제공하는 feature 숫자는 `state_precision_digits: 6`에 따라 유효 숫자 6자리로 압축하여 작은 모델의 입력 한도에 대응합니다. feature를 삭제하지 않으며 공통 상태·캐시 hash도 압축된 값으로 통일합니다. 원본 봉 가격과 장부의 체결 가격은 그대로 보존합니다. 이 값도 대회 설정 hash에 포함됩니다. 기존 설정에 이 필드가 없으면 이전 전체 정밀도 상태를 재현합니다.
 
-## Replay / Backtest
+같은 스타일 + 다른 모델 실험은 새 참가자 ID와 `provider`, `model`, 선택적 `base_url`로 선언할 수 있습니다. 제공자를 바꾸면 모델을 명시해야 하며 자동 대체 모델을 추측하지 않습니다. 새 스타일은 `questions`와 `policy`의 direction / quality / risk / 선택적 confirmation 질문 매핑으로 추가할 수 있습니다. 공통 확률 질문과 typed response 검증을 유지해야 합니다. 별도 모델의 설치와 지원 여부는 운영자가 준비합니다.
 
-CSV 열은 `symbol,timeframe,timestamp,open,high,low,close,volume`이며 timestamp는 **UTC offset이 있는 봉 시작 시각**입니다. 1m/5m/15m/1h 데이터를 함께 제공하고 최소 60개 1시간 봉의 준비 구간을 확보합니다. 입력은 순서와 무관하게 확정 시각 순서로 재생합니다. 과거 15분 실험의 설정도 읽을 수 있으며 체결 해상도를 설정별로 구분합니다.
+| 환경변수 | 용도 |
+| --- | --- |
+| `JEV_PROVIDER`, `JEV_BASE_URL`, `JEV_MODEL` | 전역 제공자·System One 주소·모델 |
+| `TYPESAFE_API_KEY` / `LOCAL_JEV_API_KEY` | 제공자별 서버 전용 키; 서로 다른 서버에 전송하지 않음 |
+| `JEV_CONCURRENCY` | 기본 TypeSafe 4 / local 1, 최대 8 |
+| `LOCAL_JEV_CONCURRENCY` | 로컬 Compose worker 수, 기본 1 |
+| `LOCAL_JEV_TIMEOUT_SECONDS` | 로컬 요청 제한 7초 |
+| `LOCAL_JEV_MODEL`, `LOCAL_TOURNAMENT_ID` | 통합 로컬 Compose 모델·대회 ID |
+| `LAB_TOURNAMENT_ID` | 기본 Compose 대회 ID |
+| `LAB_AUTOSTART` | 기본 true; false면 수집 worker를 실행하지 않음 |
+| `LAB_MODE` | 기본 LIVE_PAPER; REPLAY는 실시간 worker 대기 |
+| `LAB_RUN_ID`, `LOCAL_LAB_RUN_ID` | tournament를 비활성화한 기존 단일 실험 모드 |
+| `STOCK_API_KEY`, `STOCK_API_SECRET` | KIS 시세 키 |
+| `POSTGRES_PASSWORD`, `DASHBOARD_BIND_ADDRESS` | DB 비밀번호·웹 바인딩 |
+
+기존 1분 판단, 5분·15분·1시간 문맥을 유지합니다. 전체 판단 호출 예산은 기본 8초, 로컬 요청은 7초입니다. 큐에 대기한 요청의 마감은 **다음 분 경계 / 준비 시각 + 50초 / 대회 종료 중 가장 이른 시각**입니다. worker는 남은 예산 내에서만 호출합니다. 시도 제한·백오프·응답 검증은 기존 어댑터를 유지합니다. 스타일과 종목 우선순위를 분마다 순환합니다.
+
+마감 초과·대기 중 만료·큐 초과는 관망으로 기록하고 누락 수를 공개합니다. **10:01:03에 알려진 판단을 10:01:00 시가로 체결하지 않습니다.** 정상 판단은 응답 시각 이후 처음 이용 가능한 봉 시가에만 적용합니다. 원본 응답, 제공자별 모델 버전, 시작·완료·마감 시각과 지연을 보존합니다. 제공자 실패 시 다른 모델로 자동 전환하지 않습니다.
+
+## 시장·체결·동일 리스크
+
+종목 목록은 BTC/KRW, ETH/KRW, 삼성전자(005930), SK하이닉스(000660), KODEX 200(069500), KODEX 코스닥150(229200)을 보존합니다. 첫 기본 대회는 `crypto`입니다. `stock` / `mixed`로 변경할 때는 새 대회 ID를 사용합니다. KIS 시세에는 키와 API 권한이 필요하며 현재 환경에서는 실제 인증 호출을 검증하지 않았습니다. 과거 문맥 준비·휴장·stale 데이터에서는 관망합니다. 거래소 휴일 캘린더는 연동하지 않았습니다.
+
+Upbit public REST와 캔들 WebSocket을 사용합니다. WebSocket 알림 후 REST 확정 봉을 읽고, 연결 장애에는 정기 수집을 유지합니다. KIS는 OAuth와 국내 분봉 시세 GET만 구현했습니다. 빈 봉·합성 가격을 만들지 않습니다. 이미 저장한 확정 봉의 공급자 수정은 기존 값을 유지하고 이벤트로 기록합니다. 기존 Binance / Alpaca 데이터 어댑터도 남아 있으나 기준 통화와 종목을 맞춘 별도 설정이 필요하고 환율 변환은 구현하지 않았습니다.
+
+모든 참가자에게 동일한 **거래당 위험 0.5%, 종목 배분 최대 10%, 동시 포지션 3개, 일일 손실 한도 2%**를 적용합니다. 일일 한도는 KST 기준 미실현 손실을 포함하고 다른 참가자에게 전파되지 않습니다. `equal_risk_budgets` 기본 true는 다른 risk_profile을 거절합니다. 별도 실험에서만 이를 false로 바꾸고 차이를 기록할 수 있습니다. 손절 배수·익절 비율·보유 시간은 참가자별 parameters로 기록할 수 있으며 기본 모두 ATR 1.5 / 손익비 2 / 최대 10분입니다.
+
+편도 수수료 0.1%, 불리한 슬리피지 5bp를 동일 적용합니다. 예상 익절폭이 왕복 비용 0.30% + 여유 0.05% 이하이면 `COST_FILTER`로 거절합니다. 이는 설정값이며 실제 호가·계정 수수료를 측정한 값은 아닙니다. 국내 주식·ETF는 정수 주만 체결하고 공매도는 기본 금지합니다. 최대 배분으로 한 주도 살 수 없는 종목은 수량 미달로 거절합니다.
+
+같은 시각의 모든 종목을 시가에 처리한 뒤 고가·저가·종가로 평가합니다. 갭 손절, 같은 봉의 손절 우선, 보유 시간 제한과 국내 종목 15:20 이후 진입 제한을 유지합니다. 매수 후 보유는 배분 상한을 지키는 수동 기준 전략이며 손절·익절·시간 청산을 하지 않습니다. **체결 기록은 확정 OHLCV로 재구성되어 봉이 끝난 뒤 반영됩니다.** 틱·호가 기반 즉시 체결은 구현하지 않았으며 장애 시 가상 청산 기록이 늦어질 수 있습니다.
+
+## 장부 보존·관리
+
+기존 `research_runs`, 계정, 주문·거래·포지션·판단·후속 수익률은 삭제하지 않습니다. 새 대회는 별도 ID로 생성하고 `tournaments`, `traders`에 연결합니다. 기존 장부에 nullable tournament_id / trader_id 등을 추가하고 이전 참가자 ID를 backfill합니다. 원본 응답·현금·기존 run_id는 유지합니다. Jev 판단의 unique key는 기존 feature_id 단독에서 **(feature_id, trader_id)**로 확장합니다.
+
+`schema_migrations` version 1은 PostgreSQL과 SQLite에 자동 적용되며 반복 실행해도 기존 실험을 재초기화하지 않습니다. SQLite는 unique 제약 변경을 위해 판단 테이블을 복사·교체하고 ID와 데이터·참조를 보존합니다. 배포 전 DB 백업을 보관하세요. 이 변경 작업의 기존 PostgreSQL 백업은 Git 제외 `data/before-tournament-migration.sql`에 있습니다. `.env`, 키, DB와 `data/`는 Git에 올리지 않습니다. **`docker compose down -v`는 연구 DB와 모델 볼륨을 삭제하므로 사용하지 않습니다.**
+
+실제 연결 점검 중 시작된 `jev-tournament-7d-local-v1`은 입력 길이 초과·시간 초과를 확인하여 일시정지한 채 보존했습니다. 질문과 threshold를 바꾸지 않았고, 공통 숫자 압축을 적용한 새 실험 `jev-tournament-7d-local-v2`로 분리했습니다. migration 전후 기존 16계정·806판단의 개수와 현금·원본 응답 digest가 일치했습니다.
+
+웹·HTTP에는 변경 기능이 없습니다. Docker/SSH 관리 명령으로 일시정지·재개합니다.
 
 ```bash
-docker compose exec backend python -m app.replay replay \
-  --candles /app/data/candles.csv --run-id replay-001 \
-  --start 2026-09-01T00:00:00Z --end 2026-09-30T23:59:59Z \
-  --decisions /app/data/jev-cache.jsonl --output /app/data/replay-001.json
+docker compose -f compose.yaml -f compose.local.yaml exec backend python -m app.admin pause
+docker compose -f compose.yaml -f compose.local.yaml exec backend python -m app.admin resume
 ```
 
-실시간과 동일한 `strategy_action`, 리스크·브로커·batch 체결 함수를 사용합니다. Replay에서 외부 Jev 호출은 하지 않습니다. `--decisions`가 없거나 해당 state가 캐시에 없으면 Jev는 관망하고 기준선만 실행됩니다. 캐시는 JSONL이며 `symbol,timestamp,state_hash,observed_at,raw_response`를 포함합니다. 입력 state의 canonical SHA-256이 정확히 일치해야 합니다. 실제 판단 가용 시각인 observed_at도 반영하여 결과를 알기 전에 체결되지 않게 합니다. 새 캐시는 `model_version`도 포함해 `local:` 모델 구분을 Replay에 보존합니다.
+종료 시각을 늘리지 않으며 종료된 대회는 재개할 수 없습니다. 중지 중에도 시세·기존 포지션의 리스크 처리는 이어집니다.
+
+## 읽기 전용 API
+
+`GET /api/tournament/current`, `/api/tournament/{id}`, `/leaderboard`, `/equity`와 `GET /api/traders`, `/api/traders/{id}`, `/portfolio`, `/positions`, `/trades`, `/decisions`를 제공합니다. 참가자 API는 `?tournament_id=...`로 과거 대회를 선택할 수 있습니다.
+
+기존 `/api/decisions`, `/api/calibration`, `/api/evaluation`은 `run_id`와 `trader_id`를 지원합니다. 연구 화면의 실험 선택에서 이전 LAB_RUN_ID 기록도 조회할 수 있습니다. `/api/decisions/{id}`는 원본 질문·응답·재시도·후속 수익률을 보여줍니다. 새 대회 UI는 대회 API를 사용하며 기존 overview는 이전 단일 Jev 화면용입니다. `/health`, `/logs`, `/metrics`도 보존했습니다.
+
+## Research · Replay · Walk-forward
+
+확률 calibration, 관망 shadow 관측, 1 / 3 / 5 / 15 / 60 / 240 / 1440분 후속 수익률, 모델 버전, 시장 국면과 통계는 참가자별로 보존합니다. 셋업 확률과 실제 상승 확률은 다르며 상관관계만으로 수익성을 증명하지 않습니다. 신뢰 구간은 최소 10일의 일간 블록, 연환산·샤프·소르티노는 최소 30일 기준을 유지합니다.
+
+확정 봉 CSV 열은 `symbol,timeframe,timestamp,open,high,low,close,volume`이고 timestamp는 UTC offset을 포함합니다. 실행 구간 이전에 각 시간대 최소 60개 봉을 준비해야 합니다. 데이터 파일은 호스트 `data/`에서 컨테이너 `/app/data/`로 연결됩니다.
 
 ```bash
-docker compose exec backend python -m app.replay export-cache \
-  --run-id krw-scalp-1m-v2 --output /app/data/jev-cache.jsonl
+docker compose exec backend python -m app.replay export-cache --run-id jev-tournament-7d-local-v2 --output /app/data/decisions.jsonl
+docker compose exec backend python -m app.replay replay --tournament --source-run jev-tournament-7d-local-v2 --candles /app/data/candles.csv --decisions /app/data/decisions.jsonl --run-id replay-tournament-v1 --output /app/data/replay.json
 ```
 
-종료 시 열린 포지션은 시가평가하고 강제로 청산하지 않습니다. 기존 실험 ID와 확정된 다른 가격의 동일 봉을 덮어쓰지 않습니다. 모델이 과거 시장을 학습했을 가능성은 별도 한계입니다. 진정한 prospective out-of-sample 검증에는 모델·파라미터를 먼저 고정하고 이후 새 데이터를 수집해야 합니다.
-
-## 평가 방법
-
-판단이 관망이어도 1분·3분·5분·15분·1시간·4시간·24시간 이후 수익률을 저장합니다. 시작은 API 응답이 사용 가능해진 시각이며 당시 마지막 확정 1분봉 가격을 기준으로 합니다. 목표 시각 이후 첫 확정 봉을 사용하되 지연이 1분을 넘으면 표본을 만들지 않습니다. 1분 단타의 오탐 비율은 5분 후 방향성 수익률로 계산합니다. 과거 15분 실험은 기존 1시간 기준을 유지합니다. 휴장 구간을 임의 보간하지 않습니다.
-
-확률 검증은 매수·공매도, 셋업 확률·셋업 점수 확신도, 시간 구간, 모델 버전, 시장 국면으로 조회할 수 있습니다. 각 구간의 수·평균·중앙값·상승 비율·표준편차와 상관계수를 제공합니다. 일 단위 블록 부트스트랩 구간은 최소 10일 관측 후 표시합니다. 셋업 확률은 가격 상승 확률과 동일한 목표가 아니므로 방향 수익률 대비 Brier 값은 proxy입니다. 겹치는 표본에는 시간 의존성이 있으며 이 초기 bootstrap이 이를 완전히 해결하지는 않습니다.
-
-일간 평가액으로 Sharpe·Sortino를 계산하며 최소 30개 일간 수익률이 필요합니다. 연환산은 최소 30일일 때만 표시합니다. 최대 낙폭, 손익비, 승률, 평균 이익·손실, 기대 손익, 거래 수, 관망률·오탐 proxy·국면별 순손익을 제공합니다. 값이 정의되지 않거나 표본이 없으면 `—`를 표시합니다.
+실시간 로컬 제공자를 유지하려면 명령 앞에 `-f compose.yaml -f compose.local.yaml`을 사용해도 됩니다. source-run에서 원래 설정·모델·질문과 대회 시작·종료 시각을 읽고 새로운 실험 ID로 재현합니다. 캐시 key는 **종목 / feature 시각 / state hash / trader_id / 질문 hash / provider / 요청 모델**입니다. 원본 `observed_at`과 deadline을 유지하여 지연을 무시하거나 다른 참가자의 응답을 재사용하지 않습니다. export에는 기준 전략의 신호 관측 시각도 포함하여 시세 수집 지연을 보존합니다. 일치하는 Jev 캐시가 없으면 모델을 새로 호출하지 않고 관망합니다. 기준 전략 시각 캐시가 없는 순수 오프라인 실험은 봉 확정 시각을 신호 관측 시각으로 가정합니다. 제한된 데이터 구간의 replay는 부분 성과이며 7일을 채우지 않으면 완료 대회로 표시하지 않습니다.
 
 ```bash
-docker compose exec backend python -m app.replay walk-forward \
-  --candles /app/data/candles.csv --decisions /app/data/jev-cache.jsonl \
-  --run-id protocol-001 --start 2026-01-01T00:00:00Z \
-  --oos-start 2026-07-01T00:00:00Z --oos-end 2026-08-01T00:00:00Z \
-  --thresholds 0.65,0.75,0.85 --output /app/data/protocol-001.json
+docker compose exec backend python -m app.replay walk-forward --tournament --source-run jev-tournament-7d-local-v2 --trader-id jev-trend --candles /app/data/candles.csv --decisions /app/data/decisions.jsonl --run-id trend-wf-v1 --start 2025-01-01T00:00:00Z --oos-start 2025-07-01T00:00:00Z --oos-end 2025-08-01T00:00:00Z --thresholds 0.65,0.75,0.85 --output /app/data/walkforward.json
 ```
 
-2개월 개발 구간에서 임계값을 선택하고 1개월 검증 구간에는 고정 적용합니다. 개발 끝과 검증 사이, 검증과 최종 테스트 사이에는 최대 후속 수익률을 커버하는 embargo를 둡니다. 마지막 개발 구간에서 선택한 값을 최종 미사용 테스트에 한 번 적용합니다. 구간·파라미터·출처 해시를 저장하며 같은 protocol prefix의 재실행은 거절합니다. 새 ID로 같은 테스트 데이터를 재사용한다고 미사용 데이터가 되지는 않습니다.
+날짜는 예시이며 해당 기간의 실제 봉과 정확한 질문 캐시가 필요합니다. 지정한 Jev 참가자의 threshold만 개발 구간에서 선택하고 다른 참가자의 수익으로 선택하지 않습니다. 2개월 개발 / 1개월 검증을 순환하고 최종 미사용 구간은 한 번 평가합니다. 기본 24시간 embargo는 가장 긴 후속 수익률을 포함합니다. 검증·최종 테스트로 파라미터를 다시 고르지 않습니다. 같은 prefix의 프로토콜 재사용은 거절합니다. ID를 바꾸는 것으로 이미 본 테스트 데이터가 미사용 데이터가 되지는 않습니다.
 
-## 대시보드와 운영 관찰
+이전 단일 실험은 `--tournament` 없이 `--source-run 이전ID`로 replay / walk-forward합니다. 기존 3항 state cache key와 4계정 엔진을 유지합니다. 실시간 첫 대회의 threshold를 실험 도중 바꾸는 명령은 제공하지 않습니다.
 
-현황, 판단 기록·원본 JSON, 확률 검증, 성과 평가 페이지를 제공합니다. 모바일에서는 종목 카드와 두 열 지표, 표의 내부 가로 스크롤을 사용합니다. 원본 JSON은 재현성을 위해 영어 field 이름과 응답을 그대로 보여줍니다. 모든 자산·손익은 KRW이며 외부 Jev API 비용만 USD로 따로 표시합니다.
-
-공급자가 이미 저장된 확정 봉을 수정해 반환하면 원본 저장값을 유지하고, 수정 응답은 `CANDLE_REVISION_IGNORED` 로그에 보존합니다. 판단 캐시도 저장된 봉으로 맞추며 이후 새 봉 수집은 계속합니다.
-
-`/health`는 DB 연결과 worker·공급자 상태, `/logs`는 최근 시스템 이벤트, `/metrics`는 Prometheus 호환 카운터·가상 평가액·포지션 수입니다. Docker healthcheck와 로그를 확인할 수 있습니다.
+## 검증
 
 ```bash
-docker compose logs -f backend
+docker compose build
+docker compose up -d
 docker compose exec backend pytest -q
-docker compose exec db pg_dump -U lab -d lab > backup.sql
 ```
 
-기본 schema는 첫 실행에 생성됩니다. 이후 기존 열을 바꾸는 업그레이드에는 별도 migration이 필요합니다. DB volume과 백업을 보존하고, 실험 설정을 변경하면 기존 실험을 새 설정으로 재개하지 않고 `LAB_RUN_ID`를 새 값으로 설정합니다.
+프런트엔드 Dockerfile에서 `npm ci` 후 `next build --webpack` production build를 실행합니다. 개발 환경에 Node 의존성을 설치했다면 `cd frontend && npm ci && npm run build`로도 확인할 수 있습니다. 로컬 전체 실행 검증은 앞의 두 Compose 파일을 함께 사용하는 명령으로 합니다.
 
-## 테스트와 한계
+테스트는 기존 회계·확정 봉·API·연구 테스트를 유지하고 9계정 시작금, 자금·손실 한도 격리, 독립 질문·응답, 공통 상태, concurrency·지연, 순위, 종료 가격·장부 고정, SQLite 기존 데이터 migration, 다중 replay와 참가자별 walk-forward를 추가했습니다. 라이브 시세와 로컬 모델 연결 확인은 별도로 수행합니다. **전체 7일 실시간 성과는 대회가 실제 종료되어야 확인할 수 있습니다.**
 
-외부 HTTP는 unit test에서 mock합니다. 지표·미래 봉 배제·시세 장애·응답 검증·재시도·사이징·KRW 정수 주·수수료·슬리피지·장벽·일일 손실·일시정지·회계·shadow return·replay 재현성을 검사합니다. 프론트엔드 production build는 TypeScript 검사를 포함합니다.
-
-실제 주문 구현·거래소 private API·계좌 API는 없습니다. 주문은 내부 DB 레코드뿐입니다. 가상 체결은 오더북·유동성·부분 체결·주식 거래세·배당·분할·대차료·거래소 최소 주문 금액을 완전히 재현하지 않습니다. 부동소수점 회계는 연구용이며 결제용 원장 수준의 정밀도를 보장하지 않습니다. 현 단계의 수익률로 Jev의 금융 예측력이나 통계적 유의성을 주장하지 않습니다.
+2026-10-04의 실제 빌드·87개 테스트·모델 연결·기존 장부 보존 검증은 [docs/verification.md](docs/verification.md)에 기록했습니다.

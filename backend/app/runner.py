@@ -10,7 +10,7 @@ from sqlalchemy import select
 from .config import load_config
 from .decision_runtime import DecisionRuntime, bind_runtime
 from .db import Session, SystemEvent, utcnow
-from .features import build_state
+from .features import build_state, compact_state
 from .market import Candle, FeatureSnapshot, MINUTES, is_stale, providers, store_bar
 from .jev import JevClient, JevDecision
 from .jev import StrategyDecision
@@ -21,9 +21,18 @@ from .trading import (
     process_execution_batch,
     snapshot_accounts,
     strategy_action,
+    Tournament,
 )
 from .market import aware
 from .research import update_forward_returns
+from .tournament import (
+    ensure_tournament,
+    finish_if_due,
+    start_tournament,
+    tournament_fingerprint,
+    market_universe,
+)
+from .decision_queue import TournamentDecisionQueue
 
 logger = logging.getLogger(__name__)
 
@@ -32,10 +41,17 @@ class Runner:
     def __init__(self):
         self.cfg = load_config()
         self.decision_runtime = DecisionRuntime.from_env()
-        self.run_id = os.getenv("LAB_RUN_ID", "krw-scalp-1m-v2")
+        self.tournament_mode = bool(self.cfg.tournament and self.cfg.tournament.enabled)
+        self.run_id = (
+            os.getenv("LAB_TOURNAMENT_ID", "jev-tournament-7d-v1")
+            if self.tournament_mode
+            else os.getenv("LAB_RUN_ID", "krw-scalp-1m-v2")
+        )
         self.config_hash = hashlib.sha256(
             self.cfg.model_dump_json().encode()
         ).hexdigest()
+        if self.tournament_mode:
+            self.config_hash = tournament_fingerprint(self.cfg, self.decision_runtime)
         self.lock = asyncio.Lock()
         self.tasks = []
         self.client = None
@@ -45,6 +61,9 @@ class Runner:
         self.history_cache = {}
         self.market_updated = asyncio.Event()
         self.jev_slots = asyncio.Semaphore(self.decision_runtime.concurrency)
+        self.decision_queue = (
+            TournamentDecisionQueue(self) if self.tournament_mode else None
+        )
 
     def event(self, kind, payload=None, level="INFO"):
         with Session.begin() as db:
@@ -55,8 +74,13 @@ class Runner:
         self.crypto, self.stock = providers(self.client)
         self.jev = JevClient(self.client, self.cfg, self.decision_runtime)
         with Session.begin() as db:
-            run = ensure_run(db, self.run_id, "LIVE_PAPER", self.cfg, self.config_hash)
-            bind_runtime(db, run, self.decision_runtime)
+            if self.tournament_mode:
+                ensure_tournament(db, self.run_id, self.cfg, self.decision_runtime)
+            else:
+                run = ensure_run(
+                    db, self.run_id, "LIVE_PAPER", self.cfg, self.config_hash
+                )
+                bind_runtime(db, run, self.decision_runtime)
         if os.getenv("LAB_MODE", "LIVE_PAPER") != "LIVE_PAPER":
             self.status = "REPLAY_IDLE"
             return
@@ -67,6 +91,12 @@ class Runner:
             asyncio.create_task(self.supervise_poll()),
             asyncio.create_task(self.websocket()),
         ]
+        if self.decision_queue:
+            self.decision_queue.recover_interrupted()
+            self.tasks.extend(
+                asyncio.create_task(self.decision_queue.worker())
+                for _ in range(self.decision_runtime.concurrency)
+            )
 
     async def supervise_poll(self):
         while True:
@@ -89,11 +119,17 @@ class Runner:
             await self.client.aclose()
 
     async def websocket(self):
+        if self.tournament_mode and self.cfg.tournament.market_mode == "stock":
+            self.ws_status = "DISABLED"
+            return
         while True:
             try:
                 self.ws_status = "CONNECTED"
                 await self.crypto.stream(
-                    self.cfg.market.crypto_symbols,
+                    self.cfg.market.crypto_symbols
+                    if not self.tournament_mode
+                    or self.cfg.tournament.market_mode != "stock"
+                    else [],
                     self.cfg.market.timeframes,
                     self.ingest_stream,
                 )
@@ -178,6 +214,10 @@ class Runner:
                 (self.crypto, self.cfg.market.crypto_symbols),
                 (self.stock, self.cfg.market.stock_symbols),
             ]:
+                if self.tournament_mode:
+                    symbols = [s for s in symbols if s in market_universe(self.cfg)]
+                if not symbols:
+                    continue
                 if provider is self.stock and (
                     not self.stock.key or not self.stock.secret
                 ):
@@ -219,6 +259,11 @@ class Runner:
             async with self.lock:
                 batches = {}
                 with Session.begin() as db:
+                    tournament = (
+                        db.get(Tournament, self.run_id)
+                        if self.tournament_mode
+                        else None
+                    )
                     for symbol, histories in collected.items():
                         cursor = db.scalar(
                             select(MarketCursor).where(
@@ -241,6 +286,17 @@ class Runner:
                                 )
                             )
                     for timestamp, bars in sorted(batches.items()):
+                        if tournament:
+                            bars = [
+                                b
+                                for b in bars
+                                if tournament.started_at
+                                and b.timestamp >= aware(tournament.started_at)
+                                and b.end <= aware(tournament.ends_at)
+                                and tournament.status in {"RUNNING", "PAUSED"}
+                            ]
+                            if not bars:
+                                continue
                         process_execution_batch(
                             db,
                             self.run_id,
@@ -253,15 +309,30 @@ class Runner:
                                 for b in bars
                             ),
                         )
-                    if not batches:
+                    if not batches and not tournament:
                         snapshot_accounts(db, self.run_id, utcnow(), self.cfg)
+                    if tournament:
+                        finish_if_due(db, tournament, utcnow(), self.cfg)
                     update_forward_returns(db, self.run_id, utcnow(), self.cfg)
-                await asyncio.gather(
-                    *(
-                        self.process_symbol_safely(symbol, histories)
-                        for symbol, histories in collected.items()
+                if self.tournament_mode:
+                    jobs = []
+                    for symbol, histories in collected.items():
+                        try:
+                            jobs.extend(
+                                self.prepare_tournament_symbol(symbol, histories)
+                            )
+                        except ValueError:
+                            self.symbol_status[symbol] = "WARMING_UP"
+                    await self.decision_queue.submit(
+                        jobs, int(utcnow().timestamp() // 60)
                     )
-                )
+                else:
+                    await asyncio.gather(
+                        *(
+                            self.process_symbol_safely(symbol, histories)
+                            for symbol, histories in collected.items()
+                        )
+                    )
             remaining = max(
                 0.05,
                 self.cfg.market.poll_seconds
@@ -271,6 +342,70 @@ class Runner:
                 await asyncio.wait_for(self.market_updated.wait(), timeout=remaining)
             except TimeoutError:
                 pass
+
+    def prepare_tournament_symbol(self, symbol, histories):
+        now = utcnow()
+        if any(
+            len(histories.get(tf, [])) < self.cfg.features.minimum_bars
+            for tf in self.cfg.market.timeframes
+        ):
+            self.symbol_status[symbol] = "WARMING_UP"
+            return []
+        if any(
+            is_stale(
+                b[-1],
+                now,
+                self.cfg.market.stale_multiplier,
+                self.cfg.market.future_tolerance_seconds,
+            )
+            for b in histories.values()
+        ):
+            self.symbol_status[symbol] = "DATA_STALE"
+            return []
+        if "/" not in symbol:
+            from zoneinfo import ZoneInfo
+
+            local = now.astimezone(ZoneInfo(self.cfg.trading.timezone))
+            if local.weekday() >= 5 or not 540 <= local.hour * 60 + local.minute < 930:
+                self.symbol_status[symbol] = "MARKET_CLOSED"
+                return []
+        bar = histories[self.cfg.strategy.timeframe][-1]
+        with Session.begin() as db:
+            tournament = db.get(Tournament, self.run_id)
+            if tournament.status not in {"PENDING", "RUNNING"}:
+                return []
+            start_tournament(db, tournament, now, self.cfg)
+            state = build_state(
+                symbol, self.cfg.strategy.timeframe, histories, bar.end, self.cfg
+            )
+            if self.cfg.tournament.state_precision_digits:
+                state = compact_state(state, self.cfg.tournament.state_precision_digits)
+            candle = db.scalar(
+                select(Candle).where(
+                    Candle.symbol == symbol,
+                    Candle.timeframe == bar.timeframe,
+                    Candle.timestamp == bar.timestamp,
+                )
+            )
+            feature = db.scalar(
+                select(FeatureSnapshot).where(
+                    FeatureSnapshot.run_id == self.run_id,
+                    FeatureSnapshot.candle_id == candle.id,
+                )
+            )
+            if not feature:
+                feature = FeatureSnapshot(
+                    run_id=self.run_id,
+                    candle_id=candle.id,
+                    timestamp=bar.end,
+                    state=state,
+                    config_hash=self.config_hash,
+                )
+                db.add(feature)
+                db.flush()
+            jobs = self.decision_queue.prepare(db, feature, tournament, now)
+            self.symbol_status[symbol] = "RUNNING"
+            return jobs
 
     async def process_symbol(self, symbol, histories):
         now = utcnow()

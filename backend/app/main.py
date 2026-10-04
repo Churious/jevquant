@@ -6,6 +6,7 @@ from sqlalchemy import select, text
 from .api import router
 from .db import Session, SystemEvent, init_db
 from .runner import runner
+from .tournament_api import router as tournament_router
 
 
 @asynccontextmanager
@@ -16,8 +17,9 @@ async def lifespan(app):
     await runner.stop()
 
 
-app = FastAPI(title="Jev Paper Trading Lab", lifespan=lifespan)
+app = FastAPI(title="Jev Trading Tournament", lifespan=lifespan)
 app.include_router(router)
+app.include_router(tournament_router)
 
 
 @app.get("/health")

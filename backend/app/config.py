@@ -3,6 +3,7 @@ from pathlib import Path
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+from typing import Literal
 
 
 class StrictConfig(BaseModel):
@@ -80,6 +81,53 @@ class Research(StrictConfig):
     embargo_hours: int = Field(ge=24)
 
 
+class TraderParameters(StrictConfig):
+    entry_probability: float = Field(default=0.75, ge=0, le=1)
+    avoid_probability: float = Field(default=0.35, ge=0, le=1)
+    min_quality: float = Field(default=3, ge=0, le=4)
+    max_risk: float = Field(default=2, ge=0, le=4)
+    atr_stop_multiplier: float = Field(default=1.5, gt=0)
+    reward_risk_ratio: float = Field(default=2, gt=0)
+    max_holding_minutes: int = Field(default=10, ge=1)
+
+
+class TraderRiskProfile(StrictConfig):
+    risk_per_trade: float | None = Field(default=None, gt=0, le=0.1)
+    max_position_allocation: float | None = Field(default=None, gt=0, le=1)
+    max_positions: int | None = Field(default=None, gt=0)
+    daily_loss_limit: float | None = Field(default=None, gt=0, le=1)
+
+
+class TraderDefinition(StrictConfig):
+    id: str = Field(pattern=r"^[a-z][a-z0-9-]{0,31}$")
+    name: str = Field(min_length=1, max_length=80)
+    type: Literal["jev", "baseline"]
+    enabled: bool = True
+    starting_capital: float = 1000000
+    strategy: str
+    provider: Literal["inherit", "local", "typesafe"] = "inherit"
+    model: str = "inherit"
+    base_url: str | None = None
+    parameters: TraderParameters = Field(default_factory=TraderParameters)
+    # User-defined question/policy mappings extend the catalog without engine edits.
+    questions: dict | None = None
+    policy: dict[str, str] | None = None
+    risk_profile: TraderRiskProfile = Field(default_factory=TraderRiskProfile)
+
+
+class TournamentSettings(StrictConfig):
+    state_precision_digits: int | None = Field(default=None, ge=4, le=12)
+    enabled: bool = True
+    name: str = "Jev 7일 투자 대회"
+    duration_days: int = Field(default=7, ge=1, le=365)
+    market_mode: Literal["crypto", "stock", "mixed"] = "crypto"
+    starting_capital_krw: float = 1000000
+    decision_cycle_budget_seconds: float = Field(default=50, gt=0, le=60)
+    max_queued_jobs: int = Field(default=512, ge=6, le=10000)
+    final_valuation: Literal["mark_to_market"] = "mark_to_market"
+    equal_risk_budgets: bool = True
+
+
 class Config(StrictConfig):
     market: Market
     trading: Trading
@@ -89,6 +137,8 @@ class Config(StrictConfig):
     jev: Jev
     features: Features
     research: Research
+    tournament: TournamentSettings | None = None
+    traders: list[TraderDefinition] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def coherent(self):
@@ -122,6 +172,45 @@ class Config(StrictConfig):
             raise ValueError("forward horizons must be positive")
         if self.research.embargo_hours * 60 < max(self.research.forward_minutes):
             raise ValueError("embargo must cover the longest forward horizon")
+        if self.tournament and self.tournament.enabled:
+            if (
+                self.trading.base_currency != "KRW"
+                or self.trading.starting_capital != 1000000
+                or self.tournament.starting_capital_krw != 1000000
+            ):
+                raise ValueError(
+                    "Tournament participants must start with exactly 1000000 KRW"
+                )
+            if (
+                self.market.execution_timeframe != "1m"
+                or self.strategy.timeframe != "1m"
+            ):
+                raise ValueError("Tournament requires 1m execution and decisions")
+            ids = [t.id for t in self.traders]
+            if len(ids) != len(set(ids)) or not any(t.enabled for t in self.traders):
+                raise ValueError(
+                    "Tournament requires unique trader IDs and enabled participants"
+                )
+            if any(t.starting_capital != 1000000 for t in self.traders):
+                raise ValueError("Each participant requires exactly 1000000 KRW")
+            if self.tournament.equal_risk_budgets and any(
+                value != getattr(self.trading, key)
+                for trader in self.traders
+                for key, value in trader.risk_profile.model_dump(
+                    exclude_none=True
+                ).items()
+            ):
+                raise ValueError(
+                    "First tournament requires equal risk budgets; record a separate unequal-risk experiment explicitly"
+                )
+            mode = self.tournament.market_mode
+            if (
+                mode == "crypto"
+                and not self.market.crypto_symbols
+                or mode == "stock"
+                and not self.market.stock_symbols
+            ):
+                raise ValueError("Selected market universe is empty")
         return self
 
 

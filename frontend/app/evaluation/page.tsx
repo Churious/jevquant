@@ -2,6 +2,7 @@
 import { useState } from "react";
 import { useApi, money, pct } from "@/lib/api";
 import { t, strategies } from "@/lib/labels";
+import { TraderFilter } from "@/components/trader-filter";
 type Metrics = {
   total_return: number;
   annualized_return: number | null;
@@ -50,8 +51,9 @@ const rows: [keyof Metrics, string, "percent" | "money" | "number"][] = [
 ];
 export default function Evaluation() {
   const [run, setRun] = useState("");
+  const [trader, setTrader] = useState("");
   const { data: d, error } = useApi<Evaluation>(
-    `/api/evaluation?run_id=${encodeURIComponent(run)}`,
+    `/api/evaluation?run_id=${encodeURIComponent(run)}&trader_id=${encodeURIComponent(trader)}`,
   );
   return (
     <>
@@ -59,7 +61,7 @@ export default function Evaluation() {
         <div>
           <div className="eyebrow">연구 / 성과 평가</div>
           <h1>결론보다 증거를 먼저.</h1>
-          <p>독립된 네 포트폴리오에 동일한 관측과 거래 비용을 적용합니다.</p>
+          <p>독립 포트폴리오에 동일한 관측과 거래 비용을 적용합니다.</p>
         </div>
         <select
           aria-label="평가할 실험"
@@ -73,14 +75,19 @@ export default function Evaluation() {
         </select>
       </div>
       {error && <p className="error">{error}</p>}
+      <div className="toolbar">
+        <TraderFilter value={trader} onChange={setTrader} run={run} />
+      </div>
       <div className="panel">
         <h2>가상거래 성과</h2>
         <table>
           <thead>
             <tr>
               <th>지표</th>
-              {["buy_hold", "ema", "rsi", "jev"].map((s) => (
-                <th key={s}>{strategies.find(([key]) => key === s)?.[1]}</th>
+              {Object.keys(d?.portfolios ?? {}).map((s) => (
+                <th key={s}>
+                  {strategies.find(([key]) => key === s)?.[1] ?? s}
+                </th>
               ))}
             </tr>
           </thead>
@@ -88,7 +95,7 @@ export default function Evaluation() {
             {rows.map(([key, label, format]) => (
               <tr key={key}>
                 <td className="muted">{label}</td>
-                {["buy_hold", "ema", "rsi", "jev"].map((s) => {
+                {Object.keys(d?.portfolios ?? {}).map((s) => {
                   const v = d?.portfolios[s]?.[key];
                   return (
                     <td key={s}>

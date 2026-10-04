@@ -144,7 +144,12 @@ def overview():
 
 
 @router.get("/api/market")
-def market():
+def market(trader_id: str | None = None):
+    selected = trader_id or (
+        next((t.id for t in runner.cfg.traders if t.enabled and t.type == "jev"), "jev")
+        if runner.tournament_mode
+        else "jev"
+    )
     result = []
     with Session() as db:
         for symbol in (
@@ -168,7 +173,10 @@ def market():
             )
             d = (
                 db.scalar(
-                    select(JevDecision).where(JevDecision.feature_id == feature.id)
+                    select(JevDecision).where(
+                        JevDecision.feature_id == feature.id,
+                        JevDecision.trader_id == selected,
+                    )
                 )
                 if feature
                 else None
@@ -177,7 +185,7 @@ def market():
                 db.scalar(
                     select(StrategyDecision).where(
                         StrategyDecision.feature_id == feature.id,
-                        StrategyDecision.strategy == "jev",
+                        StrategyDecision.strategy == selected,
                     )
                 )
                 if feature
@@ -311,21 +319,27 @@ def trades(strategy: str = "jev", run_id: str | None = None):
 
 
 @router.get("/api/decisions")
-def decisions(run_id: str | None = None, limit: int = Query(200, ge=1, le=1000)):
+def decisions(
+    run_id: str | None = None,
+    limit: int = Query(200, ge=1, le=1000),
+    trader_id: str | None = None,
+):
     with Session() as db:
-        rows = db.execute(
+        query = (
             select(JevDecision, FeatureSnapshot)
             .join(FeatureSnapshot)
             .where(FeatureSnapshot.run_id == (run_id or runner.run_id))
             .order_by(JevDecision.id.desc())
-            .limit(limit)
         )
+        if trader_id:
+            query = query.where(JevDecision.trader_id == trader_id)
+        rows = db.execute(query.limit(limit))
         result = []
         for d, f in rows:
             s = db.scalar(
                 select(StrategyDecision).where(
                     StrategyDecision.feature_id == f.id,
-                    StrategyDecision.strategy == "jev",
+                    StrategyDecision.jev_decision_id == d.id,
                 )
             )
             result.append(
@@ -336,6 +350,11 @@ def decisions(run_id: str | None = None, limit: int = Query(200, ge=1, le=1000))
                     "regime": f.state["regime"],
                     "status": d.status,
                     "model_version": d.model_version,
+                    "trader_id": d.trader_id,
+                    "tournament_id": d.tournament_id,
+                    "decision_started_at": d.decision_started_at,
+                    "decision_completed_at": d.decision_completed_at,
+                    "decision_latency_ms": d.latency_ms,
                     "long_probability": (d.raw_response or {})
                     .get("answers", {})
                     .get("long_setup", {})
@@ -384,6 +403,7 @@ def calibration_api(
     axis: str = "probability",
     regime: str | None = None,
     model: str | None = None,
+    trader_id: str | None = None,
 ):
     if (
         horizon not in runner.cfg.research.forward_minutes
@@ -392,20 +412,26 @@ def calibration_api(
     ):
         raise HTTPException(422, "Unsupported calibration dimension")
     with Session() as db:
+        run = db.get(ResearchRun, run_id or runner.run_id)
+        if not run:
+            raise HTTPException(404, "Research run not found")
+        from .config import Config
+
         return calibration(
             db,
             run_id or runner.run_id,
-            runner.cfg,
+            Config.model_validate(run.config),
             horizon,
             direction,
             axis,
             regime,
             model,
+            trader_id,
         )
 
 
 @router.get("/api/evaluation")
-def evaluation_api(run_id: str | None = None):
+def evaluation_api(run_id: str | None = None, trader_id: str | None = None):
     with Session() as db:
         run = db.get(ResearchRun, run_id or runner.run_id)
         if not run:
@@ -413,7 +439,7 @@ def evaluation_api(run_id: str | None = None):
         from .config import Config
 
         result = evaluation(
-            db, run_id or runner.run_id, Config.model_validate(run.config)
+            db, run_id or runner.run_id, Config.model_validate(run.config), trader_id
         )
         result["runs"] = [
             {"id": r.id, "mode": r.mode, "metadata": r.metadata_json}

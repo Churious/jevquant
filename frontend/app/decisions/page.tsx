@@ -1,5 +1,7 @@
 "use client";
 import Link from "next/link";
+import { useState } from "react";
+import { TraderFilter } from "@/components/trader-filter";
 import { useApi, time, pct } from "@/lib/api";
 import { assetName, t } from "@/lib/labels";
 type Decision = {
@@ -11,15 +13,23 @@ type Decision = {
   long_probability: number | null;
   action: string;
   regime: string;
+  trader_id: string;
+  decision_latency_ms: number;
 };
 export default function Decisions() {
-  const { data, error } = useApi<Decision[]>("/api/decisions");
+  const [trader, setTrader] = useState("");
+  const { data, error } = useApi<Decision[]>(
+    `/api/decisions?trader_id=${encodeURIComponent(trader)}`,
+  );
   return (
     <>
       <div className="eyebrow">연구 / 판단 기록</div>
       <h1>모든 판단을 기록합니다.</h1>
       <p>관망한 판단도 이후 수익률 검증을 위해 보존합니다.</p>
       {error && <p className="error">{error}</p>}
+      <div className="toolbar">
+        <TraderFilter value={trader} onChange={setTrader} />
+      </div>
       <div className="panel">
         <h2>모델 판단 관찰</h2>
         {data?.length ? (
@@ -29,11 +39,13 @@ export default function Decisions() {
                 {[
                   "시각",
                   "종목",
+                  "참가자",
                   "매수 확률",
                   "결정",
                   "시장 국면",
                   "모델",
                   "상태",
+                  "추론 시간",
                 ].map((x) => (
                   <th key={x}>{x}</th>
                 ))}
@@ -46,11 +58,13 @@ export default function Decisions() {
                     <Link href={`/decisions/${d.id}`}>{time(d.timestamp)}</Link>
                   </td>
                   <td>{assetName(d.symbol)}</td>
+                  <td>{d.trader_id}</td>
                   <td>{pct(d.long_probability)}</td>
                   <td>{t(d.action)}</td>
                   <td className="muted">{t(d.regime)}</td>
                   <td className="mono">{d.model_version ?? "응답 없음"}</td>
                   <td>{t(d.status)}</td>
+                  <td>{(d.decision_latency_ms / 1000).toFixed(1)}초</td>
                 </tr>
               ))}
             </tbody>

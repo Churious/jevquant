@@ -4,11 +4,11 @@ import time
 import json
 
 import httpx
-from pydantic import BaseModel, ConfigDict, Field, model_validator
-from sqlalchemy import DateTime, Float, ForeignKey, Integer, String
+from pydantic import BaseModel, ConfigDict, Field, model_validator, ValidationInfo
+from sqlalchemy import DateTime, Float, ForeignKey, Integer, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
-from .db import Base, json_type, utcnow
+from .db import Base, ExperimentScope, json_type, utcnow
 from .decision_runtime import DecisionRuntime
 
 TREND = ["strong_down", "down", "neutral", "up", "strong_up"]
@@ -108,8 +108,9 @@ class JevResponse(BaseModel):
     usage: dict = Field(default_factory=dict)
 
     @model_validator(mode="after")
-    def validate_answers(self):
-        for key, question in QUESTIONS.items():
+    def validate_answers(self, info: ValidationInfo):
+        questions = (info.context or {}).get("questions", QUESTIONS)
+        for key, question in questions.items():
             answer = self.answers.get(key)
             if answer is None or answer.type != question["type"]:
                 raise ValueError(f"missing or mismatched answer:{key}")
@@ -130,7 +131,9 @@ class JevResponse(BaseModel):
             if not math.isclose(sum(probabilities.values()), 1, abs_tol=0.01):
                 raise ValueError("probabilities must sum to 1")
             expected = set(
-                TREND if answer.type == "choice" else [str(i) for i in range(5)]
+                question["criteria"]
+                if answer.type == "choice"
+                else [str(i) for i in range(len(question["criteria"]))]
             )
             if set(probabilities) != expected:
                 raise ValueError("unexpected probability options")
@@ -143,7 +146,7 @@ class JevResponse(BaseModel):
             if answer.type == "score":
                 if (
                     answer.score is None
-                    or not 0 <= answer.score <= 4
+                    or not 0 <= answer.score <= len(question["criteria"]) - 1
                     or not answer.legend
                     or set(answer.legend) != expected
                 ):
@@ -162,10 +165,16 @@ class JevResponse(BaseModel):
         return self
 
 
-class JevDecision(Base):
+class JevDecision(Base, ExperimentScope):
     __tablename__ = "jev_decisions"
+    __table_args__ = (
+        UniqueConstraint("feature_id", "trader_id", name="uq_jev_feature_trader"),
+    )
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    feature_id: Mapped[int] = mapped_column(ForeignKey("features.id"), unique=True)
+    feature_id: Mapped[int] = mapped_column(ForeignKey("features.id"))
+    trader_id: Mapped[str] = mapped_column(
+        String(32), default="jev", server_default="jev", index=True
+    )
     timestamp: Mapped[object] = mapped_column(DateTime(timezone=True), default=utcnow)
     request: Mapped[dict] = mapped_column(json_type)
     raw_response: Mapped[dict | None] = mapped_column(json_type, nullable=True)
@@ -175,9 +184,21 @@ class JevDecision(Base):
     latency_ms: Mapped[float] = mapped_column(Float)
     request_count: Mapped[int] = mapped_column(Integer)
     estimated_cost: Mapped[float | None] = mapped_column(Float, nullable=True)
+    queued_at: Mapped[object | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    deadline_at: Mapped[object | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    decision_started_at: Mapped[object | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    decision_completed_at: Mapped[object | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
 
-class StrategyDecision(Base):
+class StrategyDecision(Base, ExperimentScope):
     __tablename__ = "strategy_decisions"
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     run_id: Mapped[str] = mapped_column(String(64), index=True)
@@ -199,11 +220,12 @@ class JevClient:
         self.runtime = runtime or DecisionRuntime.from_env()
         self.request_timeout = self.runtime.timeout_seconds or cfg.jev.timeout_seconds
 
-    async def evaluate(self, state):
+    async def evaluate(self, state, questions=None):
+        questions = QUESTIONS if questions is None else questions
         request = {
             "model": self.runtime.model,
             "state": state,
-            "questions": QUESTIONS,
+            "questions": questions,
         }
         key = self.runtime.api_key
         headers = {"Authorization": f"Bearer {key}"} if key else {}
@@ -254,7 +276,9 @@ class JevClient:
                         if header.isdigit():
                             wait = min(max(wait, float(header)), 60)
                     response.raise_for_status()
-                    parsed = JevResponse.model_validate(raw)
+                    parsed = JevResponse.model_validate(
+                        raw, context={"questions": questions}
+                    )
                     model_version = self.runtime.model_version(parsed.model)
                     status = "OK"
                     break

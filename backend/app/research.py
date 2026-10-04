@@ -6,9 +6,9 @@ from datetime import timedelta
 
 import numpy as np
 from sqlalchemy import DateTime, Float, ForeignKey, Integer, UniqueConstraint, select
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, load_only
 
-from .db import Base
+from .db import Base, ExperimentScope
 from .jev import JevDecision, StrategyDecision
 from .market import Candle, FeatureSnapshot, MINUTES, aware
 from .trading import Account, PaperOrder, PaperTrade, PortfolioSnapshot
@@ -22,7 +22,7 @@ def state_hash(state):
     ).hexdigest()
 
 
-class ForwardReturn(Base):
+class ForwardReturn(Base, ExperimentScope):
     __tablename__ = "forward_returns"
     __table_args__ = (UniqueConstraint("decision_id", "horizon_minutes"),)
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
@@ -41,44 +41,54 @@ def update_forward_returns(db, run_id, now, cfg):
     execution_tf = cfg.market.execution_timeframe
     resolution = MINUTES[execution_tf]
     oldest = aware(now) - timedelta(minutes=max(cfg.research.forward_minutes) + 60)
-    rows = db.execute(
-        select(JevDecision, FeatureSnapshot)
-        .join(FeatureSnapshot)
-        .where(
-            FeatureSnapshot.run_id == run_id,
-            JevDecision.timestamp <= now,
-            JevDecision.timestamp >= oldest,
-        )
-    )
-    for decision, feature in rows:
-        origin = aware(decision.timestamp)
-        symbol = feature.state["symbol"]
-        reference = db.scalar(
-            select(Candle)
+    # Select only mature, missing labels. Never reload every raw response each poll.
+    for minutes in sorted(set(cfg.research.forward_minutes)):
+        labeled = (
+            select(ForwardReturn.id)
             .where(
-                Candle.symbol == symbol,
-                Candle.timeframe == execution_tf,
-                Candle.timestamp <= origin - timedelta(minutes=resolution),
+                ForwardReturn.decision_id == JevDecision.id,
+                ForwardReturn.horizon_minutes == minutes,
             )
-            .order_by(Candle.timestamp.desc())
-            .limit(1)
+            .exists()
         )
-        if (
-            not reference
-            or (origin - reference.bar().end).total_seconds() > resolution * 60
-        ):
-            continue
-        completed = set(
-            db.scalars(
-                select(ForwardReturn.horizon_minutes).where(
-                    ForwardReturn.decision_id == decision.id
+        rows = db.execute(
+            select(JevDecision, FeatureSnapshot)
+            .options(
+                load_only(
+                    JevDecision.id,
+                    JevDecision.timestamp,
+                    JevDecision.tournament_id,
+                    JevDecision.trader_id,
                 )
             )
+            .join(FeatureSnapshot)
+            .where(
+                FeatureSnapshot.run_id == run_id,
+                JevDecision.timestamp <= aware(now) - timedelta(minutes=minutes),
+                JevDecision.timestamp >= oldest,
+                JevDecision.status.not_in(["QUEUED", "PROCESSING"]),
+                ~labeled,
+            )
         )
-        for minutes in cfg.research.forward_minutes:
-            target = origin + timedelta(minutes=minutes)
-            if minutes in completed or target > aware(now):
+        for decision, feature in rows:
+            origin = aware(decision.timestamp)
+            symbol = feature.state["symbol"]
+            reference = db.scalar(
+                select(Candle)
+                .where(
+                    Candle.symbol == symbol,
+                    Candle.timeframe == execution_tf,
+                    Candle.timestamp <= origin - timedelta(minutes=resolution),
+                )
+                .order_by(Candle.timestamp.desc())
+                .limit(1)
+            )
+            if (
+                not reference
+                or (origin - reference.bar().end).total_seconds() > resolution * 60
+            ):
                 continue
+            target = origin + timedelta(minutes=minutes)
             candle = db.scalar(
                 select(Candle)
                 .where(
@@ -97,6 +107,8 @@ def update_forward_returns(db, run_id, now, cfg):
                 continue
             db.add(
                 ForwardReturn(
+                    tournament_id=decision.tournament_id,
+                    trader_id=decision.trader_id,
                     decision_id=decision.id,
                     horizon_minutes=minutes,
                     origin_timestamp=origin,
@@ -130,6 +142,7 @@ def calibration(
     axis="probability",
     regime=None,
     model=None,
+    trader_id=None,
 ):
     samples = []
     for d, f, r in db.execute(
@@ -144,11 +157,29 @@ def calibration(
     ):
         if regime and f.state["regime"] != regime or model and d.model_version != model:
             continue
+        if trader_id and d.trader_id != trader_id:
+            continue
         answers = d.raw_response["answers"]
+        quality_key = "setup_quality"
+        definition = next((t for t in cfg.traders if t.id == d.trader_id), None)
+        if definition:
+            from .traders import policy_for
+
+            quality_key = policy_for(definition)["quality"]
+        if d.tournament_id:
+            from .trading import TraderRecord
+
+            record = db.scalar(
+                select(TraderRecord).where(
+                    TraderRecord.tournament_id == d.tournament_id,
+                    TraderRecord.trader_id == d.trader_id,
+                )
+            )
+            quality_key = record.definition["policy"]["quality"]
         probability = (
             answers[f"{direction}_setup"]["noul"]
             if axis == "probability"
-            else answers["setup_quality"]["confidence"]
+            else answers[quality_key]["confidence"]
         )
         samples.append(
             {
@@ -286,9 +317,11 @@ def trading_metrics(snapshots, trades, initial, trading_timezone="UTC"):
     }
 
 
-def evaluation(db, run_id, cfg):
+def evaluation(db, run_id, cfg, trader_id=None):
     portfolios = {}
     for a in db.scalars(select(Account).where(Account.run_id == run_id)):
+        if trader_id and a.strategy != trader_id:
+            continue
         snapshots = list(
             db.scalars(
                 select(PortfolioSnapshot)
@@ -305,10 +338,13 @@ def evaluation(db, run_id, cfg):
     ds = list(
         db.scalars(
             select(StrategyDecision).where(
-                StrategyDecision.run_id == run_id, StrategyDecision.strategy == "jev"
+                StrategyDecision.run_id == run_id,
+                StrategyDecision.jev_decision_id.is_not(None),
             )
         )
     )
+    if trader_id:
+        ds = [d for d in ds if d.strategy == trader_id]
     evaluated = []
     candidate_horizon = 5 if cfg.strategy.timeframe == "1m" else 60
     for d, f, r in db.execute(
@@ -321,9 +357,12 @@ def evaluation(db, run_id, cfg):
             ForwardReturn.horizon_minutes == candidate_horizon,
         )
     ):
+        if trader_id and d.trader_id != trader_id:
+            continue
         s = db.scalar(
             select(StrategyDecision).where(
-                StrategyDecision.feature_id == f.id, StrategyDecision.strategy == "jev"
+                StrategyDecision.feature_id == f.id,
+                StrategyDecision.jev_decision_id == d.id,
             )
         )
         if s:
@@ -350,9 +389,12 @@ def evaluation(db, run_id, cfg):
             )
             .join(FeatureSnapshot, StrategyDecision.feature_id == FeatureSnapshot.id)
             .where(
-                StrategyDecision.run_id == run_id, StrategyDecision.strategy == "jev"
+                StrategyDecision.run_id == run_id,
+                StrategyDecision.jev_decision_id.is_not(None),
             )
         ):
+            if trader_id and s.strategy != trader_id:
+                continue
             if f.state["regime"] == regime:
                 regime_trades.append(trade)
         regimes[regime] = {

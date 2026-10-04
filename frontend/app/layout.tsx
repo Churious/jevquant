@@ -1,8 +1,8 @@
 import "./globals.css";
 import Link from "next/link";
 export const metadata = {
-  title: "Jev · 가상거래 연구실",
-  description: "100만 원 가상 자금으로 검증하는 시장 판단 연구 플랫폼",
+  title: "Jev Trading Tournament · 7일 가상거래 대회",
+  description: "6개 Jev 투자 방식과 3개 기준 전략의 독립 100만 원 가상거래",
 };
 export default function Layout({ children }: { children: React.ReactNode }) {
   return (
@@ -10,13 +10,14 @@ export default function Layout({ children }: { children: React.ReactNode }) {
       <body>
         <aside>
           <Link className="brand" href="/">
-            jev<span> / 연구실</span>
+            jev<span> / 토너먼트</span>
           </Link>
           <div className="workspace">
-            가상거래 연구 플랫폼<span>원화 기준 · 읽기 전용</span>
+            7일 가상거래 대회<span>각 100만 원 · 읽기 전용</span>
           </div>
           <nav>
-            <Link href="/">현황</Link>
+            <Link href="/">대회 순위</Link>
+            <Link href="/results">대회 결과</Link>
             <Link href="/decisions">판단 기록</Link>
             <Link href="/calibration">확률 검증</Link>
             <Link href="/evaluation">성과 평가</Link>

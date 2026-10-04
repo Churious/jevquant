@@ -11,6 +11,7 @@ import {
 } from "recharts";
 import { useApi, pct } from "@/lib/api";
 import { t } from "@/lib/labels";
+import { TraderFilter } from "@/components/trader-filter";
 type Bucket = {
   low: number;
   high: number;
@@ -42,11 +43,12 @@ export default function Calibration() {
   const [regime, setRegime] = useState("");
   const [run, setRun] = useState("");
   const [model, setModel] = useState("");
+  const [trader, setTrader] = useState("");
   const { data: runs } = useApi<{ runs: { id: string; mode: string }[] }>(
     "/api/evaluation",
   );
   const { data: d, error } = useApi<Calibration>(
-    `/api/calibration?run_id=${encodeURIComponent(run)}&horizon=${horizon}&direction=${direction}&axis=${axis}${regime ? `&regime=${regime}` : ""}${model ? `&model=${encodeURIComponent(model)}` : ""}`,
+    `/api/calibration?run_id=${encodeURIComponent(run)}&trader_id=${encodeURIComponent(trader)}&horizon=${horizon}&direction=${direction}&axis=${axis}${regime ? `&regime=${regime}` : ""}${model ? `&model=${encodeURIComponent(model)}` : ""}`,
   );
   return (
     <>
@@ -54,6 +56,7 @@ export default function Calibration() {
       <h1>확률이 높을수록 결과도 좋아질까?</h1>
       <p>관망을 포함한 모든 판단과 이후 수익률을 비교합니다.</p>
       <div className="toolbar" style={{ flexWrap: "wrap" }}>
+        <TraderFilter value={trader} onChange={setTrader} run={run} />
         <select
           aria-label="실험 선택"
           value={run}

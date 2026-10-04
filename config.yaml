@@ -53,3 +53,23 @@ research:
   train_months: 2
   validation_months: 1
   embargo_hours: 24
+tournament:
+  enabled: true
+  state_precision_digits: 6
+  name: Jev 7일 투자 대회
+  duration_days: 7
+  market_mode: crypto
+  starting_capital_krw: 1000000
+  decision_cycle_budget_seconds: 50
+  max_queued_jobs: 512
+  final_valuation: mark_to_market
+traders:
+  - {id: jev-trend, name: Jev 추세, type: jev, strategy: trend}
+  - {id: jev-momentum, name: Jev 모멘텀, type: jev, strategy: momentum}
+  - {id: jev-breakout, name: Jev 돌파, type: jev, strategy: breakout}
+  - {id: jev-reversion, name: Jev 평균 회귀, type: jev, strategy: mean_reversion}
+  - {id: jev-multitf, name: Jev 다중 시간대, type: jev, strategy: multi_timeframe}
+  - {id: jev-adaptive, name: Jev 적응형, type: jev, strategy: adaptive}
+  - {id: baseline-buyhold, name: 매수 후 보유, type: baseline, strategy: buy_hold}
+  - {id: baseline-ema, name: EMA 교차, type: baseline, strategy: ema}
+  - {id: baseline-rsi, name: RSI 전략, type: baseline, strategy: rsi}

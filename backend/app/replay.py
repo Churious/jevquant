@@ -8,7 +8,8 @@ from pathlib import Path
 
 from sqlalchemy import select
 
-from .config import load_config
+from .config import Config, load_config
+from .decision_runtime import DecisionRuntime
 from .db import Session, init_db
 from .features import build_state
 from .jev import JevDecision, JevResponse, QUESTIONS, StrategyDecision
@@ -46,13 +47,35 @@ def load_cache(path):
         for line in Path(path).read_text(encoding="utf-8").splitlines():
             row = json.loads(line)
             key = (row["symbol"], parse_time(row["timestamp"]), row["state_hash"])
+            if "question_hash" in row:
+                if state_hash(row["questions"]) != row["question_hash"]:
+                    raise ValueError("Cache question hash mismatch")
+                key += (
+                    row["trader_id"],
+                    row["question_hash"],
+                    row["provider"],
+                    row["requested_model"],
+                )
             if "observed_at" not in row or parse_time(row["observed_at"]) < key[1]:
                 raise ValueError(
                     "cache must record answer availability as observed_at >= state timestamp"
                 )
             if key in cache:
                 raise ValueError("duplicate cached state")
-            JevResponse.model_validate(row["raw_response"])
+            if row.get("kind") == "baseline":
+                if (
+                    row["provider"] != "baseline"
+                    or row["requested_model"] != "not-called"
+                    or row["questions"] != {}
+                ):
+                    raise ValueError("Invalid baseline availability cache")
+            else:
+                JevResponse.model_validate(
+                    row["raw_response"],
+                    context={"questions": row["questions"]}
+                    if "question_hash" in row
+                    else None,
+                )
             cache[key] = row
     return cache
 
@@ -198,7 +221,19 @@ def add_months(value, months):
     )
 
 
-def walk_forward(db, bars, cache, cfg, prefix, start, oos_start, oos_end, thresholds):
+def walk_forward(
+    db,
+    bars,
+    cache,
+    cfg,
+    prefix,
+    start,
+    oos_start,
+    oos_end,
+    thresholds,
+    trader_id=None,
+    inherited=None,
+):
     from datetime import timedelta
 
     if not start < oos_start < oos_end:
@@ -207,6 +242,47 @@ def walk_forward(db, bars, cache, cfg, prefix, start, oos_start, oos_end, thresh
         raise ValueError("walk-forward needs real cached Jev judgments")
     if any(not 0 <= t <= 1 for t in thresholds):
         raise ValueError("thresholds must be probabilities")
+    if trader_id and not any(
+        d.id == trader_id and d.type == "jev" and d.enabled for d in cfg.traders
+    ):
+        raise ValueError("walk-forward requires an enabled Jev trader")
+    target = trader_id or "jev"
+
+    def candidate_config(threshold):
+        candidate = cfg.model_copy(deep=True)
+        if trader_id:
+            next(
+                d for d in candidate.traders if d.id == trader_id
+            ).parameters.entry_probability = threshold
+        else:
+            candidate.strategy.long_threshold = candidate.strategy.short_threshold = (
+                threshold
+            )
+        return candidate
+
+    def simulate(candidate, identity, begin, stop, metadata):
+        if not trader_id:
+            return replay(db, bars, cache, candidate, identity, begin, stop, metadata)
+        from .tournament_replay import replay_tournament
+        import math
+
+        candidate.tournament.duration_days = max(
+            1, math.ceil((stop - begin).total_seconds() / 86400)
+        )
+        report = replay_tournament(
+            db,
+            bars,
+            cache,
+            candidate,
+            identity,
+            begin,
+            stop,
+            {**metadata, "target_trader": target},
+            inherited,
+        )
+        report["cached_decisions_used"] = report["cached_decisions_by_trader"][target]
+        return report
+
     if db.scalar(select(ResearchRun.id).where(ResearchRun.id.startswith(prefix + "-"))):
         raise ValueError(
             "experiment prefix already used; OOS evaluation is single-use per protocol"
@@ -223,12 +299,8 @@ def walk_forward(db, bars, cache, cfg, prefix, start, oos_start, oos_end, thresh
             break
         candidates = []
         for i, t in enumerate(thresholds):
-            candidate = cfg.model_copy(deep=True)
-            candidate.strategy.long_threshold = candidate.strategy.short_threshold = t
-            report = replay(
-                db,
-                bars,
-                cache,
+            candidate = candidate_config(t)
+            report = simulate(
                 candidate,
                 f"{prefix}-fold{fold}-train{i}",
                 train_start,
@@ -242,16 +314,10 @@ def walk_forward(db, bars, cache, cfg, prefix, start, oos_start, oos_end, thresh
             )
             if not report["cached_decisions_used"]:
                 raise ValueError("no matched Jev observations in training window")
-            candidates.append((report["portfolios"]["jev"]["total_return"], t))
+            candidates.append((report["portfolios"][target]["total_return"], t))
         selected = max(candidates, key=lambda x: (x[0], x[1]))[1]
-        candidate = cfg.model_copy(deep=True)
-        candidate.strategy.long_threshold = candidate.strategy.short_threshold = (
-            selected
-        )
-        validation = replay(
-            db,
-            bars,
-            cache,
+        candidate = candidate_config(selected)
+        validation = simulate(
             candidate,
             f"{prefix}-fold{fold}-validation",
             train_end,
@@ -276,12 +342,8 @@ def walk_forward(db, bars, cache, cfg, prefix, start, oos_start, oos_end, thresh
         fold += 1
     if not folds:
         raise ValueError("insufficient development/validation windows with embargo")
-    frozen = cfg.model_copy(deep=True)
-    frozen.strategy.long_threshold = frozen.strategy.short_threshold = selected
-    oos = replay(
-        db,
-        bars,
-        cache,
+    frozen = candidate_config(selected)
+    oos = simulate(
         frozen,
         prefix + "-oos",
         oos_start,
@@ -316,7 +378,13 @@ def main():
         p.add_argument("--start")
         p.add_argument("--end")
         p.add_argument("--output")
+        p.add_argument("--tournament", action="store_true")
+        p.add_argument(
+            "--source-run",
+            help="Reuse the source experiment's frozen configuration and runtime",
+        )
         if command == "walk-forward":
+            p.add_argument("--trader-id")
             p.add_argument("--oos-start", required=True)
             p.add_argument("--oos-end", required=True)
             p.add_argument("--thresholds", default="0.65,0.75,0.85")
@@ -346,6 +414,55 @@ def main():
                         "observed_at": aware(d.timestamp).isoformat(),
                     }
                 )
+                if d.tournament_id:
+                    from .trading import TraderRecord
+
+                    record = db.scalar(
+                        select(TraderRecord).where(
+                            TraderRecord.tournament_id == d.tournament_id,
+                            TraderRecord.trader_id == d.trader_id,
+                        )
+                    )
+                    rows[-1].update(
+                        trader_id=d.trader_id,
+                        tournament_id=d.tournament_id,
+                        questions=d.request["questions"],
+                        question_hash=state_hash(d.request["questions"]),
+                        provider=record.runtime["provider"],
+                        requested_model=d.request["model"],
+                        queued_at=aware(d.queued_at).isoformat()
+                        if d.queued_at
+                        else None,
+                        deadline_at=aware(d.deadline_at).isoformat()
+                        if d.deadline_at
+                        else None,
+                        decision_started_at=aware(d.decision_started_at).isoformat()
+                        if d.decision_started_at
+                        else None,
+                    )
+            for signal, feature in db.execute(
+                select(StrategyDecision, FeatureSnapshot)
+                .join(FeatureSnapshot)
+                .where(
+                    StrategyDecision.run_id == args.run_id,
+                    StrategyDecision.tournament_id.is_not(None),
+                    StrategyDecision.jev_decision_id.is_(None),
+                )
+            ):
+                rows.append(
+                    {
+                        "kind": "baseline",
+                        "symbol": feature.state["symbol"],
+                        "timestamp": aware(feature.timestamp).isoformat(),
+                        "state_hash": state_hash(feature.state),
+                        "trader_id": signal.trader_id,
+                        "questions": {},
+                        "question_hash": state_hash({}),
+                        "provider": "baseline",
+                        "requested_model": "not-called",
+                        "observed_at": aware(signal.timestamp).isoformat(),
+                    }
+                )
             Path(args.output).write_text(
                 "\n".join(json.dumps(r, allow_nan=False) for r in rows),
                 encoding="utf-8",
@@ -354,8 +471,57 @@ def main():
             return
         bars = load_bars(args.candles)
         cache = load_cache(args.decisions)
+        inherited = DecisionRuntime.from_env()
+        if args.source_run:
+            source = db.get(ResearchRun, args.source_run)
+            if not source:
+                parser.error("Source run not found")
+            cfg = Config.model_validate(source.config)
+            identity = (source.metadata_json or {}).get("decision_runtime")
+            if identity:
+                inherited = DecisionRuntime(
+                    **identity,
+                    concurrency=1 if identity["provider"] == "local" else 4,
+                    timeout_seconds=7 if identity["provider"] == "local" else None,
+                )
+            if args.tournament:
+                from .trading import TraderRecord, Tournament
+
+                source_tournament = db.get(Tournament, args.source_run)
+                if source_tournament:
+                    args.start = args.start or (
+                        aware(source_tournament.started_at).isoformat()
+                        if source_tournament.started_at
+                        else None
+                    )
+                    args.end = args.end or (
+                        aware(source_tournament.ends_at).isoformat()
+                        if source_tournament.ends_at
+                        else None
+                    )
+
+                for record in db.scalars(
+                    select(TraderRecord).where(
+                        TraderRecord.tournament_id == args.source_run
+                    )
+                ):
+                    definition = next(
+                        d for d in cfg.traders if d.id == record.trader_id
+                    )
+                    definition.questions, definition.policy = (
+                        record.questions or None,
+                        record.definition.get("policy"),
+                    )
+        elif not args.tournament:
+            cfg.tournament, cfg.traders = None, []
         if args.command == "replay":
-            result = replay(
+            simulate = replay
+            extra = {}
+            if args.tournament:
+                from .tournament_replay import replay_tournament
+
+                simulate, extra = replay_tournament, {"inherited": inherited}
+            result = simulate(
                 db,
                 bars,
                 cache,
@@ -368,11 +534,15 @@ def main():
                         Path(args.candles).read_bytes()
                     ).hexdigest(),
                     "split": "Research replay",
+                    "source_run": args.source_run,
                 },
+                **extra,
             )
         else:
             if not args.start:
                 parser.error("walk-forward requires --start")
+            if args.tournament and not args.trader_id:
+                parser.error("Tournament walk-forward requires --trader-id")
             result = walk_forward(
                 db,
                 bars,
@@ -383,6 +553,8 @@ def main():
                 parse_time(args.oos_start),
                 parse_time(args.oos_end),
                 [float(t) for t in args.thresholds.split(",")],
+                args.trader_id if args.tournament else None,
+                inherited,
             )
         output = json.dumps(result, indent=2, allow_nan=False)
         if args.output:

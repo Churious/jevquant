@@ -13,7 +13,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
-from .db import Base, json_type
+from .db import Base, ExperimentScope, json_type
 from .jev import JevResponse, StrategyDecision
 from .market import aware, MINUTES
 
@@ -30,7 +30,41 @@ class ResearchRun(Base):
     metadata_json: Mapped[dict] = mapped_column(json_type, default=dict)
 
 
-class Account(Base):
+class Tournament(Base):
+    __tablename__ = "tournaments"
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    run_id: Mapped[str] = mapped_column(ForeignKey("research_runs.id"), unique=True)
+    name: Mapped[str] = mapped_column(String(120))
+    started_at: Mapped[object | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    ends_at: Mapped[object | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    duration_days: Mapped[int] = mapped_column(Integer)
+    status: Mapped[str] = mapped_column(String(20), default="PENDING")
+    market_universe: Mapped[list] = mapped_column(json_type)
+    runtime: Mapped[dict] = mapped_column(json_type)
+    configuration_hash: Mapped[str] = mapped_column(String(64))
+    final_report: Mapped[dict | None] = mapped_column(json_type, nullable=True)
+
+
+class TraderRecord(Base):
+    __tablename__ = "traders"
+    __table_args__ = (UniqueConstraint("tournament_id", "trader_id"),)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    tournament_id: Mapped[str] = mapped_column(ForeignKey("tournaments.id"), index=True)
+    trader_id: Mapped[str] = mapped_column(String(32))
+    name: Mapped[str] = mapped_column(String(80))
+    kind: Mapped[str] = mapped_column(String(16))
+    definition: Mapped[dict] = mapped_column(json_type)
+    configuration: Mapped[dict] = mapped_column(json_type)
+    questions: Mapped[dict] = mapped_column(json_type)
+    runtime: Mapped[dict | None] = mapped_column(json_type, nullable=True)
+    configuration_hash: Mapped[str] = mapped_column(String(64))
+
+
+class Account(Base, ExperimentScope):
     __tablename__ = "accounts"
     __table_args__ = (UniqueConstraint("run_id", "strategy"),)
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
@@ -40,9 +74,13 @@ class Account(Base):
     day: Mapped[str] = mapped_column(String(10), default="")
     day_start_equity: Mapped[float] = mapped_column(Float)
     halted: Mapped[bool] = mapped_column(Boolean, default=False)
+    trader_record_id: Mapped[int | None] = mapped_column(
+        ForeignKey("traders.id"), nullable=True
+    )
+    strategy_style: Mapped[str | None] = mapped_column(String(32), nullable=True)
 
 
-class Position(Base):
+class Position(Base, ExperimentScope):
     __tablename__ = "positions"
     __table_args__ = (UniqueConstraint("account_id", "symbol"),)
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
@@ -59,7 +97,7 @@ class Position(Base):
     entry_order_id: Mapped[int] = mapped_column(ForeignKey("paper_orders.id"))
 
 
-class PaperOrder(Base):
+class PaperOrder(Base, ExperimentScope):
     __tablename__ = "paper_orders"
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     account_id: Mapped[int] = mapped_column(ForeignKey("accounts.id"), index=True)
@@ -79,7 +117,7 @@ class PaperOrder(Base):
     reason: Mapped[str] = mapped_column(String(160))
 
 
-class PaperTrade(Base):
+class PaperTrade(Base, ExperimentScope):
     __tablename__ = "paper_trades"
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     account_id: Mapped[int] = mapped_column(ForeignKey("accounts.id"), index=True)
@@ -98,7 +136,7 @@ class PaperTrade(Base):
     reason: Mapped[str] = mapped_column(String(160))
 
 
-class PortfolioSnapshot(Base):
+class PortfolioSnapshot(Base, ExperimentScope):
     __tablename__ = "portfolio_snapshots"
     __table_args__ = (UniqueConstraint("account_id", "timestamp"),)
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
@@ -108,6 +146,9 @@ class PortfolioSnapshot(Base):
     cash: Mapped[float] = mapped_column(Float)
     open_positions: Mapped[int] = mapped_column(Integer)
     status: Mapped[str] = mapped_column(String(32))
+    exposure_value: Mapped[float | None] = mapped_column(Float, nullable=True)
+    crypto_exposure: Mapped[float | None] = mapped_column(Float, nullable=True)
+    stock_exposure: Mapped[float | None] = mapped_column(Float, nullable=True)
 
 
 class MarketCursor(Base):
@@ -119,7 +160,7 @@ class MarketCursor(Base):
     timestamp: Mapped[object] = mapped_column(DateTime(timezone=True))
 
 
-def ensure_run(db, run_id, mode, cfg, config_hash, metadata=None):
+def ensure_run(db, run_id, mode, cfg, config_hash, metadata=None, participants=None):
     run = db.get(ResearchRun, run_id)
     if run and run.config_hash != config_hash:
         raise ValueError("CONFIG_CHANGED: use a new run id for a new experiment")
@@ -133,7 +174,7 @@ def ensure_run(db, run_id, mode, cfg, config_hash, metadata=None):
         )
         db.add(run)
         db.flush()
-    for strategy in STRATEGIES:
+    for strategy in STRATEGIES if participants is None else participants:
         account = db.scalar(
             select(Account).where(
                 Account.run_id == run_id, Account.strategy == strategy
@@ -150,6 +191,23 @@ def ensure_run(db, run_id, mode, cfg, config_hash, metadata=None):
             )
     db.flush()
     return run
+
+
+def account_config(db, account, cfg):
+    if account.trader_record_id:
+        from .config import Config
+
+        return Config.model_validate(
+            db.get(TraderRecord, account.trader_record_id).configuration
+        )
+    return cfg
+
+
+def passive_account(account):
+    return account.strategy_style == "buy_hold" or account.strategy in {
+        "buy_hold",
+        "baseline-buyhold",
+    }
 
 
 def strategy_action(name, state, response, cfg):
@@ -260,6 +318,13 @@ class PaperBroker(Broker):
 
         if side not in {"BUY", "SELL", "SHORT", "COVER"} or quantity <= 0:
             raise ValueError("invalid simulated order")
+        if account.tournament_id and (
+            decision.tournament_id != account.tournament_id
+            or decision.trader_id != account.trader_id
+        ):
+            raise ValueError(
+                "Decision and account must belong to the same tournament/trader"
+            )
         fill = self.fill(price, side)
         jev = (
             db.get(JevDecision, decision.jev_decision_id)
@@ -267,6 +332,8 @@ class PaperBroker(Broker):
             else None
         )
         order = PaperOrder(
+            tournament_id=account.tournament_id,
+            trader_id=account.trader_id,
             account_id=account.id,
             timestamp=timestamp,
             symbol=symbol,
@@ -286,6 +353,18 @@ class PaperBroker(Broker):
         return order
 
     def open(self, db, account, positions, decision, bar, state):
+        if account.tournament_id:
+            tournament = db.get(Tournament, account.tournament_id)
+            if tournament.status != "RUNNING" or bar.timestamp >= aware(
+                tournament.ends_at
+            ):
+                return (
+                    "TOURNAMENT_ENDED"
+                    if tournament.status == "COMPLETED"
+                    or tournament.ends_at
+                    and bar.timestamp >= aware(tournament.ends_at)
+                    else "PAUSED"
+                )
         if account.halted or len(positions) >= self.cfg.trading.max_positions:
             return "RISK_HALTED" if account.halted else "MAX_POSITIONS"
         side = "BUY" if decision.action == "LONG" else "SHORT"
@@ -297,7 +376,7 @@ class PaperBroker(Broker):
             state["volatility"]["atr14"],
             self.cfg,
         )
-        if account.strategy != "buy_hold":
+        if not passive_account(account):
             target_return = distance * self.cfg.risk.reward_risk_ratio / fill
             round_trip_cost = 2 * (
                 self.cfg.simulation.fee_rate + self.cfg.simulation.slippage_bps / 10000
@@ -329,8 +408,10 @@ class PaperBroker(Broker):
         account.cash -= order.fill_price * qty + order.fees
         direction = 1 if side == "BUY" else -1
         # Buy & Hold is a capped passive allocation, deliberately without exit barriers.
-        passive = account.strategy == "buy_hold"
+        passive = passive_account(account)
         position = Position(
+            tournament_id=account.tournament_id,
+            trader_id=account.trader_id,
             account_id=account.id,
             symbol=bar.symbol,
             side=decision.action,
@@ -367,6 +448,8 @@ class PaperBroker(Broker):
         net = gross - position.entry_fee - order.fees
         db.add(
             PaperTrade(
+                tournament_id=account.tournament_id,
+                trader_id=account.trader_id,
                 account_id=account.id,
                 symbol=position.symbol,
                 side=position.side,
@@ -407,22 +490,30 @@ class PaperBroker(Broker):
 
 def process_execution_bar(db, run_id, bar, cfg, phase="all", allow_entries=True):
     run = db.get(ResearchRun, run_id)
-    broker = PaperBroker(cfg)
+    tournament = db.get(Tournament, run_id)
+    if tournament and (
+        tournament.status in {"PENDING", "COMPLETED"}
+        or bar.timestamp < aware(tournament.started_at)
+        or bar.end > aware(tournament.ends_at)
+    ):
+        return
     for account in db.scalars(
         select(Account).where(Account.run_id == run_id).order_by(Account.id)
     ):
+        cfg_for_account = account_config(db, account, cfg)
+        broker = PaperBroker(cfg_for_account)
         positions = list(
             db.scalars(select(Position).where(Position.account_id == account.id))
         )
-        update_daily(account, positions, bar.timestamp, cfg)
+        update_daily(account, positions, bar.timestamp, cfg_for_account)
         timed_exit = False
         session_exit = False
-        if phase != "close" and account.strategy != "buy_hold":
+        if phase != "close" and not passive_account(account):
             from zoneinfo import ZoneInfo
 
             local = aware(bar.timestamp).astimezone(ZoneInfo(cfg.trading.timezone))
             session_exit = (
-                cfg.strategy.max_holding_minutes > 0
+                cfg_for_account.strategy.max_holding_minutes > 0
                 and "/" not in bar.symbol
                 and local.hour * 60 + local.minute >= 920
             )
@@ -430,9 +521,9 @@ def process_execution_bar(db, run_id, bar, cfg, phase="all", allow_entries=True)
                 if p.symbol != bar.symbol:
                     continue
                 time_exit = (
-                    cfg.strategy.max_holding_minutes > 0
+                    cfg_for_account.strategy.max_holding_minutes > 0
                     and (bar.timestamp - aware(p.timestamp)).total_seconds()
-                    >= cfg.strategy.max_holding_minutes * 60
+                    >= cfg_for_account.strategy.max_holding_minutes * 60
                 )
                 if time_exit or session_exit:
                     entry = db.get(PaperOrder, p.entry_order_id)
@@ -451,7 +542,7 @@ def process_execution_bar(db, run_id, bar, cfg, phase="all", allow_entries=True)
         for p in positions:
             if p.symbol == bar.symbol:
                 p.current_price = bar.open
-        update_daily(account, positions, bar.timestamp, cfg)
+        update_daily(account, positions, bar.timestamp, cfg_for_account)
         pending = (
             list(
                 db.scalars(
@@ -497,7 +588,16 @@ def process_execution_bar(db, run_id, bar, cfg, phase="all", allow_entries=True)
                 decision.status = "NO_CHANGE"
             elif timed_exit or session_exit:
                 decision.status = "COOLDOWN"
-            elif run.paused or not allow_entries:
+            elif (
+                run.paused
+                or not allow_entries
+                or account.tournament_id
+                and (
+                    db.get(Tournament, account.tournament_id).status != "RUNNING"
+                    or bar.timestamp
+                    >= aware(db.get(Tournament, account.tournament_id).ends_at)
+                )
+            ):
                 decision.status = "PAUSED"
             else:
                 decision.status = broker.open(
@@ -516,17 +616,32 @@ def process_execution_bar(db, run_id, bar, cfg, phase="all", allow_entries=True)
             else:
                 p.current_price = bar.close
         update_daily(
-            account, positions, bar.end if phase != "open" else bar.timestamp, cfg
+            account,
+            positions,
+            bar.end if phase != "open" else bar.timestamp,
+            cfg_for_account,
         )
     db.flush()
 
 
 def process_execution_batch(db, run_id, bars, cfg, allow_entries=True):
+    tournament = db.get(Tournament, run_id)
+    if tournament:
+        if tournament.status in {"PENDING", "COMPLETED"}:
+            return
+        bars = [
+            b
+            for b in bars
+            if b.timestamp >= aware(tournament.started_at)
+            and b.end <= aware(tournament.ends_at)
+        ]
+    if not bars:
+        return
     # All signals are filled at the batch's open before any symbol's future high/low/close is inspected.
     accounts = list(db.scalars(select(Account).where(Account.run_id == run_id)))
     for a in accounts:
         ps = list(db.scalars(select(Position).where(Position.account_id == a.id)))
-        update_daily(a, ps, bars[0].timestamp, cfg)
+        update_daily(a, ps, bars[0].timestamp, account_config(db, a, cfg))
         opens = {b.symbol: b.open for b in bars}
         for p in ps:
             if p.symbol in opens:
@@ -543,6 +658,9 @@ def process_execution_batch(db, run_id, bars, cfg, allow_entries=True):
 
 
 def snapshot_accounts(db, run_id, timestamp, cfg):
+    tournament = db.get(Tournament, run_id)
+    if tournament and tournament.status == "COMPLETED":
+        return
     paused = db.get(ResearchRun, run_id).paused
     for account in db.scalars(select(Account).where(Account.run_id == run_id)):
         positions = list(
@@ -556,11 +674,24 @@ def snapshot_accounts(db, run_id, timestamp, cfg):
         ):
             db.add(
                 PortfolioSnapshot(
+                    tournament_id=account.tournament_id,
+                    trader_id=account.trader_id,
                     account_id=account.id,
                     timestamp=timestamp,
                     equity=equity(account, positions),
                     cash=account.cash,
                     open_positions=len(positions),
+                    exposure_value=sum(p.current_price * p.quantity for p in positions),
+                    crypto_exposure=sum(
+                        p.current_price * p.quantity
+                        for p in positions
+                        if "/" in p.symbol
+                    ),
+                    stock_exposure=sum(
+                        p.current_price * p.quantity
+                        for p in positions
+                        if "/" not in p.symbol
+                    ),
                     status="RISK_HALTED"
                     if account.halted
                     else "PAUSED"

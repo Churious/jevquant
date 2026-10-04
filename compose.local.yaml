@@ -8,6 +8,7 @@ services:
       LOCAL_JEV_API_KEY: ''
       JEV_CONCURRENCY: ${LOCAL_JEV_CONCURRENCY:-1}
       LAB_RUN_ID: ${LOCAL_LAB_RUN_ID:-krw-local-tev08-1m-v1}
+      LAB_TOURNAMENT_ID: ${LOCAL_TOURNAMENT_ID:-jev-tournament-7d-local-v2}
     depends_on:
       ollama:
         condition: service_started

@@ -157,6 +157,46 @@ def build_state(
             tf: b[-1].timestamp.isoformat() for tf, b in histories.items()
         },
     }
+    if cfg.tournament and cfg.tournament.enabled:
+        # Keep legacy state hashes intact when replaying old saved configurations.
+        mean, std = float(np.mean(c[-20:])), float(np.std(c[-20:], ddof=0))
+        prior_high = float(max(h[-cfg.features.structure_window - 1 : -1]))
+        prior_low = float(min(l[-cfg.features.structure_window - 1 : -1]))
+        state["volatility"].update(
+            {
+                "bollinger_position": float((c[-1] - (mean - 2 * std)) / (4 * std))
+                if std > 0
+                else 0.5,
+                "atr_deviation_ema21": float((c[-1] - e21[-1]) / atr) if atr > 0 else 0,
+                "expansion_ratio": rv
+                / max(
+                    float(np.std(np.diff(np.log(c))[-2 * window : -window], ddof=1)),
+                    1e-12,
+                ),
+            }
+        )
+        state["momentum"]["macd_histogram_change"] = float(
+            (macd[-1] - signal[-1]) - (macd[-2] - signal[-2])
+        )
+        state["market_structure"].update(
+            {
+                "prior_rolling_high": prior_high,
+                "prior_rolling_low": prior_low,
+                "distance_prior_high": float(c[-1] / prior_high - 1),
+                "distance_prior_low": float(c[-1] / prior_low - 1),
+            }
+        )
+        state["higher_timeframe"]["structure"] = {
+            tf: {
+                "distance_prior_high": float(
+                    b[-1].close / max(x.high for x in b[-25:-1]) - 1
+                ),
+                "distance_prior_low": float(
+                    b[-1].close / min(x.low for x in b[-25:-1]) - 1
+                ),
+            }
+            for tf, b in histories.items()
+        }
 
     def finite(value):
         if isinstance(value, dict):
@@ -166,3 +206,12 @@ def build_state(
     if not finite(state):
         raise ValueError("NON_FINITE_FEATURE")
     return state
+
+
+def compact_state(value, digits=6):
+    """Bound model input size without dropping features; candle/ledger values stay exact."""
+    if isinstance(value, dict):
+        return {key: compact_state(item, digits) for key, item in value.items()}
+    if isinstance(value, list):
+        return [compact_state(item, digits) for item in value]
+    return float(format(value, f".{digits}g")) if isinstance(value, float) else value

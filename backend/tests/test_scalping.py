@@ -159,6 +159,8 @@ def test_minute_replay_uses_same_execution_resolution(db):
 
 def test_legacy_experiment_config_remains_readable():
     raw = load_config().model_dump()
+    raw.pop("tournament")
+    raw.pop("traders")
     raw["market"]["timeframes"] = ["5m", "15m", "1h"]
     raw["market"].pop("execution_timeframe")
     raw["strategy"]["timeframe"] = "15m"
