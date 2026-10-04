@@ -29,6 +29,7 @@ const labels: Record<string, string> = {
   CONNECTED: "연결됨",
   REST_FALLBACK: "REST 대체 수집",
   CREDENTIALS_MISSING: "시세 API 키 필요",
+  KIWOOM_CREDENTIALS_MISSING: "키움 REST 앱키·시크릿키 필요",
   WARMING_UP: "과거 데이터 준비 중",
   MARKET_CLOSED: "장 마감·휴장",
   REPLAY_IDLE: "리플레이 대기",

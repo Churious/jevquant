@@ -222,7 +222,11 @@ class Runner:
                     not self.stock.key or not self.stock.secret
                 ):
                     for symbol in symbols:
-                        self.symbol_status[symbol] = "CREDENTIALS_MISSING"
+                        self.symbol_status[symbol] = (
+                            "KIWOOM_CREDENTIALS_MISSING"
+                            if provider.name == "kiwoom"
+                            else "CREDENTIALS_MISSING"
+                        )
                     continue
                 for symbol in symbols:
                     try:

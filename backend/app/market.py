@@ -253,11 +253,12 @@ class StockProvider(MarketDataProvider):
 
 def providers(client):
     from .korean_market import KISProvider, UpbitProvider
+    from .kiwoom_market import KiwoomProvider
 
     crypto = {"binance": CryptoProvider, "upbit": UpbitProvider}.get(
         os.getenv("CRYPTO_DATA_PROVIDER", "upbit")
     )
-    stock = {"alpaca": StockProvider, "kis": KISProvider}.get(
+    stock = {"alpaca": StockProvider, "kis": KISProvider, "kiwoom": KiwoomProvider}.get(
         os.getenv("STOCK_DATA_PROVIDER", "kis")
     )
     if not crypto or not stock:
