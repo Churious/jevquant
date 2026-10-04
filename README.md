@@ -84,6 +84,8 @@ docker compose up -d
 
 기본 바인딩은 localhost입니다. 서버 `.env`에 `DASHBOARD_BIND_ADDRESS=0.0.0.0`을 설정한 후 같은 Compose 명령을 실행하면 `http://서버LAN주소:3000`으로 접속할 수 있습니다. 외부 접속에는 HTTPS 리버스 프록시를 구성할 수 있습니다. 백엔드는 localhost, DB와 Ollama는 Docker 내부 통신을 사용합니다. Docker 자체가 서버 부팅 시 실행되도록 설정하면 `unless-stopped` 정책으로 이어서 실행합니다.
 
+서버 시계는 NTP로 동기화해야 합니다. `timedatectl status`에서 동기화 여부를 확인하세요. 실제 시장의 봉 시각과 서버의 응답·마감 시각을 비교하므로 시계 오차가 있으면 판단이 누락되거나 체결이 지연됩니다. Rocky Linux에서는 chronyd와 부팅 시 동기화 대기를 구성할 수 있습니다. Podman의 Docker 호환 Compose도 사용 가능하며 healthcheck는 인라인 문자열 대신 별도 파일로 실행합니다.
+
 ## Architecture
 
 ```text

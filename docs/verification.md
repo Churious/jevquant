@@ -49,3 +49,13 @@ docker compose -f compose.yaml -f compose.local.yaml up -d --build
 - 테스트에서 다중 참가자 replay, 실제 응답·기준 전략 관측 시각에 따른 미래 봉 체결, 참가자별 walk-forward 선택, 종료 mark-to-market 및 최종 장부 고정을 검증했습니다.
 
 **7일 실시간 성과는 아직 없습니다.** 종료 처리는 테스트에서 검증했으며 실제 승자·수익률은 위 종료 시각 이후 고정 보고서로 확인해야 합니다. KIS 인증 시세와 Rocky Linux 서버 실행은 이번 환경에서 검증하지 않았습니다.
+
+## 후속 Rocky Linux 서버 배포
+
+같은 날 Rocky Linux 9.7 / i7-8700 / RAM 16GB 서버에서 Podman 5.6.0와 Docker Compose 5.1.4로 추가 검증했습니다. Docker 호환 API가 인라인 healthcheck 인수를 잘못 해석하는 문제를 별도 Python·Node probe 파일로 해결했습니다. 서버에서 frontend production build 성공, 전체 테스트 **87 passed in 30.07s**, 백엔드·프런트엔드·DB healthy를 확인했습니다.
+
+6개 native 질문 요청 모두 정상이며 CPU 지연은 약 9.7–11초였습니다. 시작 전 서버 전용 override에 요청 제한 15초·전체 평가 예산 16초를 기록했고 1분·50초 cycle deadline·질문·threshold·리스크는 유지했습니다. 분당 12개 요청을 모두 처리할 수는 없으며 마감 누락이 실제 기록됩니다.
+
+서버 시계가 약 96초 빠른 것을 발견하여 초기 대회를 일시정지하고 보존했습니다. chrony 설치·활성화 및 `NTPSynchronized=yes` 확인 후 새 ID `jev-tournament-7d-rocky-v3`로 시작했습니다. 서버 부팅 서비스는 시간 동기화를 기다린 뒤 세 Compose 파일로 실행하며 기존 다른 앱은 유지했습니다. 서버 재부팅 자체를 수행하지는 않았습니다.
+
+서버 대회 시작은 **2026-10-04 11:01:20.690978 KST**, 종료는 **2026-10-11 같은 시각**입니다. 실제 최초 9계정 스냅샷이 모두 1,000,000원이었고, 라이브 장부에서 6개 스타일의 정상 응답과 2개 가상 주문을 확인했습니다. LAN HTTP 및 읽기 API는 200을 반환했습니다. 이 후속 점검의 최종 브라우저 캡처는 검사 도구 연결 시간 초과로 완료하지 못했습니다. KIS 인증 시세와 실제 7일 성과는 여전히 미검증입니다.
